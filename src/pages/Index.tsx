@@ -11,14 +11,12 @@ import {
   distributeProducts,
   generateOutputFile,
 } from '@/utils/excelProcessor';
-import { Customer, Product, DistributionMethod } from '@/types/excel';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Customer, Product } from '@/types/excel';
 
 const Index = () => {
   const [customerFile, setCustomerFile] = useState<File | null>(null);
   const [productFile, setProductFile] = useState<File | null>(null);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
-  const [distributionMethod, setDistributionMethod] = useState<DistributionMethod>('random');
   const [isProcessing, setIsProcessing] = useState(false);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -64,7 +62,7 @@ const Index = () => {
     setIsProcessing(true);
     try {
       const templateWorkbook = await validateTemplate(templateFile);
-      const orders = distributeProducts(customers, products, distributionMethod);
+      const orders = distributeProducts(customers, products, 'random');
       const outputBlob = await generateOutputFile(templateWorkbook, orders);
 
       const url = URL.createObjectURL(outputBlob);
@@ -154,34 +152,6 @@ const Index = () => {
               onFileUpload={handleTemplateFileUpload}
               uploadedFile={templateFile}
             />
-          </CardContent>
-        </Card>
-
-        {/* Distribution Method */}
-        <Card className="shadow-xl mb-8">
-          <CardHeader>
-            <CardTitle>Phương Pháp Phân Phối</CardTitle>
-            <CardDescription>Chọn cách phân phối sản phẩm cho khách hàng</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Select
-              value={distributionMethod}
-              onValueChange={(value) => setDistributionMethod(value as DistributionMethod)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="random">Ngẫu nhiên</SelectItem>
-                <SelectItem value="sequential">Tuần tự</SelectItem>
-                <SelectItem value="even">Đều đặn</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-sm text-muted-foreground mt-2">
-              {distributionMethod === 'random' && 'Phân phối sản phẩm ngẫu nhiên cho các khách hàng'}
-              {distributionMethod === 'sequential' && 'Phân phối sản phẩm theo thứ tự khách hàng'}
-              {distributionMethod === 'even' && 'Phân phối đều sản phẩm cho tất cả khách hàng'}
-            </p>
           </CardContent>
         </Card>
 
