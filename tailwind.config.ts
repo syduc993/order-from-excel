@@ -47,6 +47,11 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        excel: {
+          DEFAULT: "hsl(150 70% 28%)",
+          light: "hsl(150 60% 50%)",
+          dark: "hsl(150 80% 20%)",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
