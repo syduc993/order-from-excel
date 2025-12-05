@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Upload, FileSpreadsheet, CheckCircle2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, CheckCircle2, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface FileUploadZoneProps {
@@ -8,6 +8,7 @@ interface FileUploadZoneProps {
   description: string;
   onFileUpload: (file: File) => void;
   uploadedFile: File | null;
+  isLoading?: boolean;
   accept?: Record<string, string[]>;
 }
 
@@ -16,8 +17,10 @@ export const FileUploadZone = ({
   description,
   onFileUpload,
   uploadedFile,
+  isLoading = false,
   accept = {
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+    'application/vnd.ms-excel.sheet.macroEnabled.12': ['.xlsm'],
     'application/vnd.ms-excel': ['.xls'],
   },
 }: FileUploadZoneProps) => {
@@ -34,6 +37,8 @@ export const FileUploadZone = ({
     onDrop,
     accept,
     multiple: false,
+    noClick: isLoading,
+    noKeyboard: isLoading,
   });
 
   return (
@@ -42,15 +47,27 @@ export const FileUploadZone = ({
       <div
         {...getRootProps()}
         className={cn(
-          'border-2 border-dashed rounded-lg p-6 transition-all cursor-pointer',
+          'border-2 border-dashed rounded-lg p-6 transition-all',
+          isLoading ? 'cursor-wait opacity-60' : 'cursor-pointer',
           'hover:border-primary hover:bg-secondary/50',
-          isDragActive && 'border-primary bg-secondary/50',
-          uploadedFile && 'border-accent bg-accent/5'
+          isDragActive && !isLoading && 'border-primary bg-secondary/50',
+          uploadedFile && !isLoading && 'border-accent bg-accent/5',
+          isLoading && 'border-primary bg-secondary/30'
         )}
       >
-        <input {...getInputProps()} />
+        <input {...getInputProps()} disabled={isLoading} />
         <div className="flex flex-col items-center justify-center text-center space-y-3">
-          {uploadedFile ? (
+          {isLoading ? (
+            <>
+              <Loader2 className="w-10 h-10 text-primary animate-spin" />
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  Đang xử lý file...
+                </p>
+                <p className="text-xs text-muted-foreground">Vui lòng đợi trong giây lát</p>
+              </div>
+            </>
+          ) : uploadedFile ? (
             <>
               <CheckCircle2 className="w-10 h-10 text-accent" />
               <div className="space-y-1">

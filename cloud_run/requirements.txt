@@ -1,0 +1,5 @@
+flask==3.*
+requests==2.*
+supabase==2.*
+gunicorn==23.*
+

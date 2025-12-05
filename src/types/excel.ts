@@ -9,6 +9,7 @@ export interface Product {
   name: string;
   quantity: number;
   price: number;
+  id: number; // ID sản phẩm từ file DSSP (cột "ID sản phẩm")
 }
 
 export interface OrderRow {
