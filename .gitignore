@@ -13,7 +13,7 @@ dist-ssr
 *.local
 
 # Environment variables
-.env
+# .env - Removed from gitignore for personal test project
 .env.local
 .env.production
 
