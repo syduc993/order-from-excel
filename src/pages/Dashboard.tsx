@@ -27,8 +27,7 @@ import {
     Cell,
     ComposedChart
 } from 'recharts';
-import { Loader2, ArrowLeft, Filter } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Loader2, Filter } from 'lucide-react';
 import {
     Table,
     TableBody,
@@ -42,7 +41,6 @@ import {
 import { convertHourToVietnam, normalizeDate, formatDateForDisplay } from '@/utils/dateUtils';
 
 const Dashboard = () => {
-    const navigate = useNavigate();
     const [batchId, setBatchId] = useState('');
     const [startDate, setStartDate] = useState<Date | undefined>(undefined);
     const [endDate, setEndDate] = useState<Date | undefined>(undefined);
@@ -172,9 +170,6 @@ const Dashboard = () => {
     return (
         <div className="container mx-auto p-6 space-y-6">
             <div className="flex items-center gap-4">
-                <Button variant="outline" size="icon" onClick={() => navigate('/')}>
-                    <ArrowLeft className="h-4 w-4" />
-                </Button>
                 <h1 className="text-3xl font-bold">Dashboard Thống Kê</h1>
             </div>
 

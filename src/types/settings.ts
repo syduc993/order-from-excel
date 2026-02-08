@@ -1,0 +1,104 @@
+// Settings types and default values for all configurable business rules
+
+export interface TimeSlotConfig {
+  start: number; // Giờ bắt đầu (decimal, e.g. 8.5 = 8h30)
+  end: number;   // Giờ kết thúc
+  weight: number; // Trọng số (cao điểm = nhiều đơn hơn)
+}
+
+export interface ApiConfig {
+  depotId: number;
+  nhanhAppId: string;
+  nhanhBusinessId: string;
+  nhanhAccessToken: string;
+}
+
+export interface OrderRulesConfig {
+  minTotalAmount: number;
+  maxTotalAmount: number;
+  minProductsPerOrder: number;
+  maxProductsPerOrder: number;
+  minQuantityPerProduct: number;
+  maxQuantityPerProduct: number;
+  sweepMaxValue: number;
+  maxConsecutiveFails: number;
+}
+
+export interface TimeDistributionConfig {
+  timeSlots: TimeSlotConfig[];
+  weekendBoost: number;
+  lateOrderPercent: number;
+  lateOrderMinCount: number;
+  lateOrderMaxCount: number;
+  lateOrderTimeStart: number; // decimal hours, e.g. 22.77 = 22h46
+  lateOrderTimeEnd: number;   // decimal hours, e.g. 23.5 = 23h30
+}
+
+export interface ExcelConfig {
+  customerSheetName: string;
+  productSheetName: string;
+  templateSheetName: string;
+}
+
+export interface AppSettings {
+  apiConfig: ApiConfig;
+  orderRules: OrderRulesConfig;
+  timeDistribution: TimeDistributionConfig;
+  excelConfig: ExcelConfig;
+}
+
+// Setting keys used in Supabase app_settings table
+export type SettingKey = 'api_config' | 'order_rules' | 'time_distribution' | 'excel_config';
+
+// Map from SettingKey to AppSettings property
+export const SETTING_KEY_MAP: Record<SettingKey, keyof AppSettings> = {
+  api_config: 'apiConfig',
+  order_rules: 'orderRules',
+  time_distribution: 'timeDistribution',
+  excel_config: 'excelConfig',
+};
+
+// Default values extracted from current hardcoded values in the codebase
+export const DEFAULT_TIME_SLOTS: TimeSlotConfig[] = [
+  { start: 8.5, end: 10, weight: 1 },     // 8h30-10h: Bình thường
+  { start: 10, end: 12, weight: 3 },       // 10h-12h: CAO ĐIỂM
+  { start: 12, end: 14, weight: 0.3 },     // 12h-14h: RẤT THẤP
+  { start: 14, end: 16, weight: 1 },       // 14h-16h: Bình thường
+  { start: 16, end: 18, weight: 3 },       // 16h-18h: CAO ĐIỂM
+  { start: 18, end: 20, weight: 1 },       // 18h-20h: Bình thường
+  { start: 20, end: 21.5, weight: 3 },     // 20h-21h30: CAO ĐIỂM
+  { start: 21.5, end: 22.75, weight: 0.8 },// 21h30-22h45: Giảm dần
+];
+
+export const DEFAULT_SETTINGS: AppSettings = {
+  apiConfig: {
+    depotId: 215639,
+    nhanhAppId: '',
+    nhanhBusinessId: '',
+    nhanhAccessToken: '',
+  },
+  orderRules: {
+    minTotalAmount: 300000,
+    maxTotalAmount: 2000000,
+    minProductsPerOrder: 1,
+    maxProductsPerOrder: 5,
+    minQuantityPerProduct: 1,
+    maxQuantityPerProduct: 3,
+    sweepMaxValue: 200000,
+    maxConsecutiveFails: 100,
+  },
+  timeDistribution: {
+    timeSlots: DEFAULT_TIME_SLOTS,
+    weekendBoost: 1.8,
+    lateOrderPercent: 0.25,
+    lateOrderMinCount: 1,
+    lateOrderMaxCount: 2,
+    lateOrderTimeStart: 22.77, // 22h46
+    lateOrderTimeEnd: 23.5,    // 23h30
+  },
+  excelConfig: {
+    customerSheetName: 'DSKH',
+    productSheetName: 'DSSP',
+    templateSheetName: 'template',
+  },
+};

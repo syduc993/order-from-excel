@@ -6,12 +6,12 @@ import { ApiOrderRequest, ApiProduct } from '@/types/api';
 import { calculateTotalOrders } from '@/utils/orderUtils';
 import { calculateOrdersPerDay, distributeOrdersToDays } from '@/utils/timeDistribution';
 import { generateRandomOrder } from '@/utils/orderGenerator';
-import { DEFAULT_DEPOT_ID } from '@/utils/constants';
 import { env } from '@/config/env';
 import { adjustProductsToInventory } from '@/utils/inventoryValidator';
 import { NhanhApiClient } from '@/services/nhanhApi';
 import { validateInventory, getInventoryMap } from '@/utils/inventoryValidator';
 import { InventoryValidationResult } from '@/types/inventoryTypes';
+import { useSettings } from '@/contexts/SettingsContext';
 
 interface UseOrderAdjustmentProps {
     customers: Customer[];
@@ -33,6 +33,7 @@ export const useOrderAdjustment = ({
     onSuccess,
 }: UseOrderAdjustmentProps) => {
     const [isProcessing, setIsProcessing] = useState(false);
+    const { settings } = useSettings();
 
     // Supabase configuration
     const supabaseConfig = (() => {
@@ -192,7 +193,7 @@ export const useOrderAdjustment = ({
                         usedQuantityMap.set(p.id, usedQuantities.get(p.id) || 0);
                     });
 
-                    const inventoryCheckResult = await validateInventory(currentInventory, nhanhClient, DEFAULT_DEPOT_ID);
+                    const inventoryCheckResult = await validateInventory(currentInventory, nhanhClient, settings.apiConfig.depotId);
                     
                     // Bổ sung thông tin ban đầu và đã dùng vào kết quả
                     inventoryCheckResult.checks = inventoryCheckResult.checks.map(check => ({
@@ -201,7 +202,7 @@ export const useOrderAdjustment = ({
                         usedQuantity: usedQuantityMap.get(check.productId),
                     }));
 
-                    const adjustmentInventoryMap = await getInventoryMap(currentInventory, nhanhClient, DEFAULT_DEPOT_ID);
+                    const adjustmentInventoryMap = await getInventoryMap(currentInventory, nhanhClient, settings.apiConfig.depotId);
 
                     // Gọi callback để hiển thị modal xác nhận
                     if (onInventoryCheck) {
@@ -241,7 +242,11 @@ export const useOrderAdjustment = ({
             }
 
             // Tính số lượng đơn hàng tự động từ sản phẩm còn lại (đã điều chỉnh nếu cần)
-            const totalOrders = calculateTotalOrders(finalInventory);
+            const totalOrders = calculateTotalOrders(
+                finalInventory,
+                settings.orderRules.minTotalAmount,
+                settings.orderRules.maxTotalAmount
+            );
 
             if (totalOrders <= 0) {
                 toast.warning('Không còn đủ sản phẩm để tạo thêm đơn hàng');
@@ -298,25 +303,23 @@ export const useOrderAdjustment = ({
             // Sử dụng finalInventory (đã điều chỉnh theo tồn kho thực tế nếu cần)
             const workingInventory = finalInventory.map(p => ({ ...p }));
             let consecutiveFailCount = 0;
-            const maxConsecutiveFails = 100;
+            const maxConsecutiveFails = settings.orderRules.maxConsecutiveFails;
 
             while (workingInventory.some(p => p.quantity > 0)) {
                 const availableProducts = workingInventory.filter(p => p.quantity > 0);
                 if (availableProducts.length === 0) break;
 
                 const totalRemainingValue = availableProducts.reduce((sum, p) => sum + (p.quantity * p.price), 0);
-                if (totalRemainingValue < 300000) break;
+                if (totalRemainingValue < settings.orderRules.minTotalAmount) break;
 
                 const randomCustomer = customersToUse[Math.floor(Math.random() * customersToUse.length)];
 
-                const result = generateRandomOrder(randomCustomer, workingInventory, {
-                    minTotalAmount: 300000,
-                    maxTotalAmount: 2000000,
-                    minProductsPerOrder: 1,
-                    maxProductsPerOrder: 5,
-                    minQuantityPerProduct: 1,
-                    maxQuantityPerProduct: 3,
-                });
+                const result = generateRandomOrder(
+                    randomCustomer,
+                    workingInventory,
+                    settings.orderRules,
+                    settings.apiConfig.depotId
+                );
 
                 if (result) {
                     const { order: apiRequest, totalAmount, usedProducts } = result;
@@ -340,15 +343,14 @@ export const useOrderAdjustment = ({
                 } else {
                     consecutiveFailCount++;
                     if (consecutiveFailCount >= maxConsecutiveFails) {
-                        // Flexible mode
+                        // Flexible mode (mở rộng biên)
                         const flexibleResult = generateRandomOrder(randomCustomer, workingInventory, {
-                            minTotalAmount: 100000,
-                            maxTotalAmount: 3000000,
-                            minProductsPerOrder: 1,
-                            maxProductsPerOrder: 8,
-                            minQuantityPerProduct: 1,
-                            maxQuantityPerProduct: 5,
-                        });
+                            ...settings.orderRules,
+                            minTotalAmount: Math.floor(settings.orderRules.minTotalAmount / 3),
+                            maxTotalAmount: Math.floor(settings.orderRules.maxTotalAmount * 1.5),
+                            maxProductsPerOrder: settings.orderRules.maxProductsPerOrder + 3,
+                            maxQuantityPerProduct: settings.orderRules.maxQuantityPerProduct + 2,
+                        }, settings.apiConfig.depotId);
                         if (flexibleResult) {
                             const { order: apiRequest, totalAmount, usedProducts } = flexibleResult;
                             if (usedProducts) {
@@ -378,7 +380,7 @@ export const useOrderAdjustment = ({
             // Sweep logic
             const remainingProducts = workingInventory.filter(p => p.quantity > 0);
             if (remainingProducts.length > 0) {
-                const maxSweepValue = 200000;
+                const maxSweepValue = settings.orderRules.sweepMaxValue;
                 let currentBatch: Product[] = [];
                 let currentValue = 0;
 
@@ -390,7 +392,7 @@ export const useOrderAdjustment = ({
                         const apiProducts: ApiProduct[] = currentBatch.map(p => ({ id: p.id, quantity: p.quantity, price: p.price }));
                         const batchTotal = currentBatch.reduce((sum, p) => sum + (p.quantity * p.price), 0);
                         const sweepOrder: ApiOrderRequest = {
-                            depotId: DEFAULT_DEPOT_ID,
+                            depotId: settings.apiConfig.depotId,
                             customer: { id: customerId },
                             products: apiProducts,
                             payment: { customerAmount: batchTotal }
@@ -416,7 +418,7 @@ export const useOrderAdjustment = ({
                     const apiProducts: ApiProduct[] = currentBatch.map(p => ({ id: p.id, quantity: p.quantity, price: p.price }));
                     const batchTotal = currentBatch.reduce((sum, p) => sum + (p.quantity * p.price), 0);
                     const sweepOrder: ApiOrderRequest = {
-                        depotId: DEFAULT_DEPOT_ID,
+                        depotId: settings.apiConfig.depotId,
                         customer: { id: customerId },
                         products: apiProducts,
                         payment: { customerAmount: batchTotal }

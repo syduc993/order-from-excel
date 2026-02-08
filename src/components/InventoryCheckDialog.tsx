@@ -145,7 +145,7 @@ export const InventoryCheckDialog = ({
                                 const hasAdjustmentInfo = check.initialQuantity !== undefined && check.usedQuantity !== undefined;
                                 return (
                                     <TableRow
-                                        key={check.productId}
+                                        key={`${check.productId}-${index}`}
                                         className={
                                             check.status === 'out_of_stock' ? 'bg-red-50' :
                                                 check.status === 'insufficient' ? 'bg-yellow-50' :

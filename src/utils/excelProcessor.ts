@@ -35,14 +35,14 @@ const REQUIRED_COLUMNS = [
   'Khối lượng đơn hàng',
 ];
 
-export const parseCustomerFile = async (file: File): Promise<Customer[]> => {
+export const parseCustomerFile = async (file: File, sheetName: string = 'DSKH'): Promise<Customer[]> => {
   const workbook = new ExcelJS.Workbook();
   const buffer = await file.arrayBuffer();
   await workbook.xlsx.load(buffer);
 
-  const worksheet = workbook.getWorksheet('DSKH');
+  const worksheet = workbook.getWorksheet(sheetName);
   if (!worksheet) {
-    throw new Error('Không tìm thấy sheet "DSKH" trong file khách hàng');
+    throw new Error(`Không tìm thấy sheet "${sheetName}" trong file khách hàng`);
   }
 
   const customers: Customer[] = [];
@@ -74,14 +74,14 @@ export const parseCustomerFile = async (file: File): Promise<Customer[]> => {
   return customers;
 };
 
-export const parseProductFile = async (file: File): Promise<Product[]> => {
+export const parseProductFile = async (file: File, sheetName: string = 'DSSP'): Promise<Product[]> => {
   const workbook = new ExcelJS.Workbook();
   const buffer = await file.arrayBuffer();
   await workbook.xlsx.load(buffer);
 
-  const worksheet = workbook.getWorksheet('DSSP');
+  const worksheet = workbook.getWorksheet(sheetName);
   if (!worksheet) {
-    throw new Error('Không tìm thấy sheet "DSSP" trong file sản phẩm');
+    throw new Error(`Không tìm thấy sheet "${sheetName}" trong file sản phẩm`);
   }
 
   const products: Product[] = [];

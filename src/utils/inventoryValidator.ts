@@ -4,7 +4,7 @@ import {
     InventoryCheckResult,
     InventoryValidationResult
 } from '@/types/inventoryTypes';
-import { DEFAULT_DEPOT_ID } from './constants';
+import { DEFAULT_SETTINGS } from '@/types/settings';
 
 /**
  * Validate inventory by comparing Excel quantities with actual NhanhVN inventory
@@ -16,7 +16,7 @@ import { DEFAULT_DEPOT_ID } from './constants';
 export async function validateInventory(
     products: Product[],
     nhanhClient: NhanhApiClient,
-    depotId: number = DEFAULT_DEPOT_ID
+    depotId: number = DEFAULT_SETTINGS.apiConfig.depotId
 ): Promise<InventoryValidationResult> {
     if (products.length === 0) {
         return {
@@ -28,16 +28,31 @@ export async function validateInventory(
         };
     }
 
-    // Get all product IDs
-    const productIds = products.map(p => p.id);
+    // Aggregate products by ID - sum quantities for same productId
+    const aggregatedProducts = new Map<number, { id: number; name: string; totalQuantity: number }>();
+    for (const product of products) {
+        const existing = aggregatedProducts.get(product.id);
+        if (existing) {
+            existing.totalQuantity += product.quantity;
+        } else {
+            aggregatedProducts.set(product.id, {
+                id: product.id,
+                name: product.name || `SP#${product.id}`,
+                totalQuantity: product.quantity,
+            });
+        }
+    }
+
+    // Get unique product IDs
+    const productIds = Array.from(aggregatedProducts.keys());
 
     // Fetch inventory from NhanhVN
     const inventoryMap = await nhanhClient.checkProductInventory(productIds, depotId);
 
     // Compare Excel quantities with actual inventory
-    const checks: InventoryCheckResult[] = products.map(product => {
+    const checks: InventoryCheckResult[] = Array.from(aggregatedProducts.values()).map(product => {
         const actualInventory = inventoryMap.get(product.id) ?? 0;
-        const excelQuantity = product.quantity;
+        const excelQuantity = product.totalQuantity;
 
         let status: 'sufficient' | 'insufficient' | 'out_of_stock';
         if (actualInventory === 0) {
@@ -50,7 +65,7 @@ export async function validateInventory(
 
         return {
             productId: product.id,
-            productName: product.name || `SP#${product.id}`,
+            productName: product.name,
             excelQuantity,
             actualInventory,
             status,
@@ -64,7 +79,7 @@ export async function validateInventory(
     return {
         allSufficient,
         checks,
-        totalProducts: products.length,
+        totalProducts: aggregatedProducts.size,
         insufficientCount,
         outOfStockCount,
     };
@@ -99,7 +114,7 @@ export function adjustProductsToInventory(
 export async function getInventoryMap(
     products: Product[],
     nhanhClient: NhanhApiClient,
-    depotId: number = DEFAULT_DEPOT_ID
+    depotId: number = DEFAULT_SETTINGS.apiConfig.depotId
 ): Promise<Map<number, number>> {
     const productIds = products.map(p => p.id);
     return await nhanhClient.checkProductInventory(productIds, depotId);

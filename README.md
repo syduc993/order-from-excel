@@ -129,9 +129,6 @@ Xem hướng dẫn chi tiết tại [test_api.md](test_api.md)
 
 **Lưu ý**: Chỉ hủy đơn `pending`, không ảnh hưởng đơn đã xử lý (`completed`/`failed`)
 
-### Bước 4: Xử Lý Tự Động (Cloud Run)
-
-Xem hướng dẫn chi tiết tại [`cloud_run/README.md`](cloud_run/README.md)
 
 ## 🏗️ Kiến Trúc Hệ Thống
 
@@ -197,10 +194,6 @@ order-from-excel/
 │   ├── types/               # TypeScript types
 │   ├── utils/               # Utilities (validation, orderGenerator, timeDistribution)
 │   └── config/              # Configuration (env)
-├── cloud_run/               # Cloud Run service (Python)
-│   ├── main.py              # Cloud Run function
-│   ├── requirements.txt     # Python dependencies
-│   └── README.md            # Cloud Run documentation
 ├── public/                  # Static files
 └── README.md               # This file
 ```
@@ -215,8 +208,6 @@ order-from-excel/
 - Lưu đơn hàng vào Supabase → Kiểm tra batch ID và thống kê
 - Điều chỉnh đơn hàng → Kiểm tra hủy đơn pending và tạo lại
 
-### Test Cloud Run
-Xem hướng dẫn tại [`cloud_run/README.md`](cloud_run/README.md)
 
 ## 📝 API Reference
 
@@ -257,18 +248,11 @@ Content-Type: application/json
 - Kiểm tra kết nối internet
 - Xem logs trong Supabase Dashboard
 
-### Lỗi Cloud Run
-- Kiểm tra environment variables
-- Xem logs: `gcloud run services logs read order-processor --region asia-southeast1`
-- Kiểm tra Cloud Scheduler job có chạy không
-
 ## 📚 Tài Liệu Tham Khảo
 
 - [Kế Hoạch Triển Khai](KE_HOACH_API_V3.md)
 - [Hướng Dẫn Setup Environment](ENV_SETUP.md)
 - [Hướng Dẫn Test API](test_api.md)
-- [Hướng Dẫn Deploy Cloud Run](cloud_run/README.md)
-- [Hướng Dẫn Deploy Chi Tiết](cloud_run/DEPLOY_GUIDE.md)
 
 ## 🤝 Đóng Góp
 

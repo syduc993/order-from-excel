@@ -7,8 +7,8 @@ import { adjustProductsToInventory } from '@/utils/inventoryValidator';
 import { calculateTotalOrders } from '@/utils/orderUtils';
 import { calculateOrdersPerDay, distributeOrdersToDays } from '@/utils/timeDistribution';
 import { generateRandomOrder } from '@/utils/orderGenerator';
-import { DEFAULT_DEPOT_ID } from '@/utils/constants';
 import { env } from '@/config/env';
+import { useSettings } from '@/contexts/SettingsContext';
 
 interface UseOrderGenerationProps {
     customers: Customer[];
@@ -31,6 +31,10 @@ export const useOrderGeneration = ({
     onSuccess,
 }: UseOrderGenerationProps) => {
     const [isProcessing, setIsProcessing] = useState(false);
+    const [progress, setProgress] = useState<{ current: number; total: number; phase: string }>({
+        current: 0, total: 0, phase: '',
+    });
+    const { settings } = useSettings();
 
     // Supabase configuration
     const supabaseConfig = (() => {
@@ -68,7 +72,11 @@ export const useOrderGeneration = ({
         }
 
         // Tính số lượng đơn hàng tự động từ sản phẩm
-        const totalOrders = calculateTotalOrders(productsToUse);
+        const totalOrders = calculateTotalOrders(
+            productsToUse,
+            settings.orderRules.minTotalAmount,
+            settings.orderRules.maxTotalAmount
+        );
 
         if (totalOrders <= 0) {
             toast.error('Không thể tính số lượng đơn hàng từ sản phẩm');
@@ -76,6 +84,7 @@ export const useOrderGeneration = ({
         }
 
         setIsProcessing(true);
+        setProgress({ current: 0, total: 3, phase: 'Đang tạo đơn hàng...' });
         try {
             const supabaseService = new SupabaseService(supabaseConfig);
 
@@ -119,9 +128,9 @@ export const useOrderGeneration = ({
 
             toast.info(`Đang tạo đơn hàng (tự động tính từ ${productsToUse.length} sản phẩm)...`);
 
-            // Tạo đơn hàng chính (300k-2M) cho đến khi hết inventory hoặc không thể tạo thêm
+            // Tạo đơn hàng chính cho đến khi hết inventory hoặc không thể tạo thêm
             let consecutiveFailCount = 0;
-            const maxConsecutiveFails = 100;
+            const maxConsecutiveFails = settings.orderRules.maxConsecutiveFails;
 
             while (currentInventory.some(p => p.quantity > 0)) {
                 const availableProducts = currentInventory.filter(p => p.quantity > 0);
@@ -129,25 +138,23 @@ export const useOrderGeneration = ({
                     break;
                 }
 
-                // Nếu giá trị còn lại < 300k, dừng để vét sau
+                // Nếu giá trị còn lại < minTotalAmount, dừng để vét sau
                 const totalRemainingValue = availableProducts.reduce((sum, p) => sum + (p.quantity * p.price), 0);
-                if (totalRemainingValue < 300000) {
-                    console.log('Total remaining value < 300k, switching to sweep logic...');
+                if (totalRemainingValue < settings.orderRules.minTotalAmount) {
+                    console.log(`Total remaining value < ${settings.orderRules.minTotalAmount}, switching to sweep logic...`);
                     break;
                 }
 
                 // Random chọn khách hàng
                 const randomCustomer = customers[Math.floor(Math.random() * customers.length)];
 
-                // Try to create order with standard config (300k-2M)
-                const result = generateRandomOrder(randomCustomer, currentInventory, {
-                    minTotalAmount: 300000,
-                    maxTotalAmount: 2000000,
-                    minProductsPerOrder: 1,
-                    maxProductsPerOrder: 5,
-                    minQuantityPerProduct: 1,
-                    maxQuantityPerProduct: 3,
-                });
+                // Try to create order with settings config
+                const result = generateRandomOrder(
+                    randomCustomer,
+                    currentInventory,
+                    settings.orderRules,
+                    settings.apiConfig.depotId
+                );
 
                 if (result) {
                     const { order: apiRequest, totalAmount, usedProducts } = result;
@@ -180,16 +187,15 @@ export const useOrderGeneration = ({
                 } else {
                     consecutiveFailCount++;
 
-                    // Sau một số lần thất bại, thử flexible mode
+                    // Sau một số lần thất bại, thử flexible mode (mở rộng biên)
                     if (consecutiveFailCount >= maxConsecutiveFails) {
                         const flexibleResult = generateRandomOrder(randomCustomer, currentInventory, {
-                            minTotalAmount: 100000,
-                            maxTotalAmount: 3000000,
-                            minProductsPerOrder: 1,
-                            maxProductsPerOrder: 8,
-                            minQuantityPerProduct: 1,
-                            maxQuantityPerProduct: 5,
-                        });
+                            ...settings.orderRules,
+                            minTotalAmount: Math.floor(settings.orderRules.minTotalAmount / 3),
+                            maxTotalAmount: Math.floor(settings.orderRules.maxTotalAmount * 1.5),
+                            maxProductsPerOrder: settings.orderRules.maxProductsPerOrder + 3,
+                            maxQuantityPerProduct: settings.orderRules.maxQuantityPerProduct + 2,
+                        }, settings.apiConfig.depotId);
 
                         if (flexibleResult) {
                             const { order: apiRequest, totalAmount, usedProducts } = flexibleResult;
@@ -228,13 +234,15 @@ export const useOrderGeneration = ({
             console.log(`✅ Đã tạo ${ordersWithoutTime.length} đơn hàng (chưa phân bổ thời gian)`);
             console.log(`📦 Inventory còn lại:`, currentInventory.filter(p => p.quantity > 0).length, 'sản phẩm');
 
+            setProgress({ current: 1, total: 3, phase: 'Đang vét sản phẩm còn lại...' });
+
             // 4. Vét các sản phẩm còn thừa (nếu có) - Tạo đơn vét (chưa gán thời gian)
             const remainingProducts = currentInventory.filter(p => p.quantity > 0);
             if (remainingProducts.length > 0) {
                 const totalRemainingValue = remainingProducts.reduce((sum, p) => sum + (p.quantity * p.price), 0);
                 toast.info(`Đang tạo đơn vét cho ${remainingProducts.length} sản phẩm (${totalRemainingValue.toLocaleString()} VNĐ)...`);
 
-                const maxSweepValue = 200000;
+                const maxSweepValue = settings.orderRules.sweepMaxValue;
 
                 // Tạo các đơn vét
                 let currentBatch: Product[] = [];
@@ -260,7 +268,7 @@ export const useOrderGeneration = ({
                         const batchTotal = currentBatch.reduce((sum, p) => sum + (p.quantity * p.price), 0);
 
                         const sweepOrder: ApiOrderRequest = {
-                            depotId: DEFAULT_DEPOT_ID,
+                            depotId: settings.apiConfig.depotId,
                             customer: { id: customerId },
                             products: apiProducts,
                             payment: { customerAmount: batchTotal }
@@ -300,7 +308,7 @@ export const useOrderGeneration = ({
                     const batchTotal = currentBatch.reduce((sum, p) => sum + (p.quantity * p.price), 0);
 
                     const sweepOrder: ApiOrderRequest = {
-                        depotId: DEFAULT_DEPOT_ID,
+                        depotId: settings.apiConfig.depotId,
                         customer: { id: customerId },
                         products: apiProducts,
                         payment: { customerAmount: batchTotal }
@@ -325,6 +333,7 @@ export const useOrderGeneration = ({
             }
 
             // 5. Phân bổ tất cả đơn hàng cho các ngày
+            setProgress({ current: 2, total: 3, phase: 'Đang phân bổ thời gian...' });
             toast.info(`Đang phân bổ ${ordersWithoutTime.length} đơn hàng cho các ngày...`);
 
             const orders: Array<{
@@ -421,13 +430,14 @@ export const useOrderGeneration = ({
                 const remainingItems = currentInventory.reduce((sum, p) => sum + p.quantity, 0);
                 toast.warning(
                     `Đã tạo ${orders.length} đơn hàng. ` +
-                    `Vẫn còn ${remainingItems} sản phẩm chưa được phân bổ (do không đủ ghép thành đơn > 300k).`
+                    `Vẫn còn ${remainingItems} sản phẩm chưa được phân bổ (do không đủ ghép thành đơn > ${settings.orderRules.minTotalAmount.toLocaleString()}).`
                 );
             } else {
                 toast.success(`Đã phân bổ hết toàn bộ sản phẩm vào ${orders.length} đơn hàng.`);
             }
 
             // 4. Lưu vào Supabase (chia nhỏ để tránh timeout)
+            setProgress({ current: 3, total: 3, phase: 'Đang lưu vào database...' });
             toast.info(`Đang lưu ${orders.length} đơn hàng vào Supabase...`);
             const batchSize = 100;
             for (let i = 0; i < orders.length; i += batchSize) {
@@ -436,6 +446,7 @@ export const useOrderGeneration = ({
                 toast.info(`Đã lưu ${Math.min(i + batchSize, orders.length)}/${orders.length} đơn hàng...`);
             }
 
+            setProgress({ current: 3, total: 3, phase: 'Hoàn thành!' });
             onSuccess(batchId);
             toast.success(
                 `Đã lưu ${orders.length} đơn hàng vào Supabase thành công! ` +
@@ -451,6 +462,7 @@ export const useOrderGeneration = ({
 
     return {
         isProcessing,
+        progress,
         handleSupabaseExport,
     };
 };

@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx supabase:*)",
+      "Bash(curl:*)",
+      "Bash(ls -la \"c:\\\\ATINO\\\\order-from-excel\\\\src\"\" 2>/dev/null || echo \"src directory check \")",
+      "Bash(wc -l:*)",
+      "Bash(dir:*)",
+      "Bash(grep:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx vite build)",
+      "Bash(ls:*)",
+      "Bash(git checkout:*)",
+      "Bash(ls \"C:\\\\ATINO\\\\operations-manage-sys\\\\supabase\\\\migrations\"\" 2>NUL || echo \"No supabase/migrations dir \")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

@@ -4,21 +4,26 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { FileSpreadsheet, Database, LayoutDashboard } from 'lucide-react';
+import { FileSpreadsheet, Database, Info } from 'lucide-react';
+import { Progress } from '@/components/ui/progress';
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
     parseCustomerFile,
     parseProductFile,
 } from '@/utils/excelProcessor';
 import { Customer, Product } from '@/types/excel';
 import { DatePicker } from '@/components/DatePicker';
-import { env } from '@/config/env';
 import { validateCustomers, validateProducts } from '@/utils/validation';
-import { DEFAULT_DEPOT_ID } from '@/utils/constants';
 import { NhanhApiClient } from '@/services/nhanhApi';
 import { validateInventory, getInventoryMap } from '@/utils/inventoryValidator';
 import { InventoryValidationResult } from '@/types/inventoryTypes';
 import { InventoryCheckDialog } from '@/components/InventoryCheckDialog';
-import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSettings } from '@/contexts/SettingsContext';
 
 // Features
 import { useOrderGeneration } from '@/features/order-generation/hooks/useOrderGeneration';
@@ -28,7 +33,8 @@ import { OrderList } from '@/features/order-generation/components/OrderList';
 import { OrderAdjustmentSection } from '@/features/order-generation/components/OrderAdjustmentSection';
 
 const Index = () => {
-    const navigate = useNavigate();
+    const { canCreate } = useAuth();
+    const { settings } = useSettings();
     const [customerFile, setCustomerFile] = useState<File | null>(null);
     const [productFile, setProductFile] = useState<File | null>(null);
     const [isLoadingCustomer, setIsLoadingCustomer] = useState(false);
@@ -65,13 +71,14 @@ const Index = () => {
         newTotalOrders: 0,
     });
 
-    // NhanhVN API client - Phải khai báo trước khi sử dụng trong hooks
+    // NhanhVN API client - Sử dụng settings (fallback env vars đã merge trong SettingsContext)
     const nhanhClient = (() => {
-        if (env.nhanh.appId && env.nhanh.businessId && env.nhanh.accessToken) {
+        const { nhanhAppId, nhanhBusinessId, nhanhAccessToken } = settings.apiConfig;
+        if (nhanhAppId && nhanhBusinessId && nhanhAccessToken) {
             return new NhanhApiClient({
-                appId: env.nhanh.appId,
-                businessId: env.nhanh.businessId,
-                accessToken: env.nhanh.accessToken,
+                appId: nhanhAppId,
+                businessId: nhanhBusinessId,
+                accessToken: nhanhAccessToken,
             });
         }
         return null;
@@ -87,7 +94,7 @@ const Index = () => {
         loadOrders
     } = useOrderData();
 
-    const { isProcessing: isGenerating, handleSupabaseExport } = useOrderGeneration({
+    const { isProcessing: isGenerating, progress, handleSupabaseExport } = useOrderGeneration({
         customers,
         products,
         scheduleConfig,
@@ -161,10 +168,13 @@ const Index = () => {
     const handleCustomerFileUpload = async (file: File) => {
         setIsLoadingCustomer(true);
         try {
-            const parsedCustomers = await parseCustomerFile(file);
+            const parsedCustomers = await parseCustomerFile(file, settings.excelConfig.customerSheetName);
             const validation = validateCustomers(parsedCustomers);
             if (!validation.valid) {
-                toast.error(`Lỗi validation: ${validation.errors.slice(0, 3).join(', ')}${validation.errors.length > 3 ? '...' : ''}`);
+                toast.error(
+                    `Lỗi validation (${validation.errors.length} lỗi): ${validation.errors.slice(0, 5).join('; ')}${validation.errors.length > 5 ? ` ...và ${validation.errors.length - 5} lỗi khác` : ''}`,
+                    { duration: Infinity }
+                );
                 return;
             }
             setCustomers(parsedCustomers);
@@ -180,10 +190,13 @@ const Index = () => {
     const handleProductFileUpload = async (file: File) => {
         setIsLoadingProduct(true);
         try {
-            const parsedProducts = await parseProductFile(file);
+            const parsedProducts = await parseProductFile(file, settings.excelConfig.productSheetName);
             const validation = validateProducts(parsedProducts);
             if (!validation.valid) {
-                toast.error(`Lỗi validation: ${validation.errors.slice(0, 3).join(', ')}${validation.errors.length > 3 ? '...' : ''}`);
+                toast.error(
+                    `Lỗi validation (${validation.errors.length} lỗi): ${validation.errors.slice(0, 5).join('; ')}${validation.errors.length > 5 ? ` ...và ${validation.errors.length - 5} lỗi khác` : ''}`,
+                    { duration: Infinity }
+                );
                 return;
             }
             setProducts(parsedProducts);
@@ -206,8 +219,8 @@ const Index = () => {
         setIsCheckingInventory(true);
         try {
             toast.info('Đang kiểm tra tồn kho từ NhanhVN...');
-            const result = await validateInventory(productsToCheck, nhanhClient!, DEFAULT_DEPOT_ID);
-            const invMap = await getInventoryMap(productsToCheck, nhanhClient!, DEFAULT_DEPOT_ID);
+            const result = await validateInventory(productsToCheck, nhanhClient!, settings.apiConfig.depotId);
+            const invMap = await getInventoryMap(productsToCheck, nhanhClient!, settings.apiConfig.depotId);
 
             setInventoryCheckResult(result);
             setInventoryMap(invMap);
@@ -229,26 +242,28 @@ const Index = () => {
 
     return (
         <div className="container mx-auto p-6 space-y-8 max-w-5xl">
-            <div className="flex justify-between items-center">
-                <div className="space-y-1">
-                    <h1 className="text-3xl font-bold tracking-tight">Tạo Đơn Hàng Tự Động</h1>
-                    <p className="text-muted-foreground">
-                        Upload file Excel khách hàng và sản phẩm để tạo đơn hàng hàng loạt
-                    </p>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" onClick={() => navigate('/dashboard')}>
-                        <LayoutDashboard className="mr-2 h-4 w-4" />
-                        Dashboard
-                    </Button>
-                </div>
+            <div className="space-y-1">
+                <h1 className="text-3xl font-bold tracking-tight">Tạo Đơn Hàng Tự Động</h1>
+                <p className="text-muted-foreground">
+                    Upload file Excel khách hàng và sản phẩm để tạo đơn hàng hàng loạt
+                </p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Upload Section */}
                 <Card>
                     <CardHeader>
-                        <CardTitle>1. Upload Dữ Liệu</CardTitle>
+                        <CardTitle className="flex items-center gap-2">
+                            1. Upload Dữ Liệu
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="right" className="max-w-xs">
+                                    <p>File Excel cần có sheet "{settings.excelConfig.customerSheetName}" (khách hàng) và "{settings.excelConfig.productSheetName}" (sản phẩm). Cột bắt buộc: ID, Tên, SĐT (khách hàng) và ID, Tên, Giá, Số lượng (sản phẩm).</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </CardTitle>
                         <CardDescription>Tải lên danh sách khách hàng và sản phẩm</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
@@ -289,7 +304,17 @@ const Index = () => {
                 {/* Configuration Section */}
                 <Card>
                     <CardHeader>
-                        <CardTitle>2. Cấu Hình & Tạo Đơn</CardTitle>
+                        <CardTitle className="flex items-center gap-2">
+                            2. Cấu Hình & Tạo Đơn
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Info className="h-4 w-4 text-muted-foreground cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent side="left" className="max-w-xs">
+                                    <p>Chọn khoảng ngày để phân bổ đơn hàng. Hệ thống sẽ tự tính số đơn dựa trên tổng giá trị sản phẩm, ưu tiên cuối tuần và giờ cao điểm.</p>
+                                </TooltipContent>
+                            </Tooltip>
+                        </CardTitle>
                         <CardDescription>Thiết lập thời gian và tạo đơn hàng</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-6">
@@ -310,24 +335,36 @@ const Index = () => {
                             </div>
                         </div>
 
-                        <Button
-                            className="w-full"
-                            size="lg"
-                            onClick={handleCreateOrders}
-                            disabled={isGenerating || customers.length === 0 || products.length === 0}
-                        >
-                            {isGenerating ? (
-                                <>
-                                    <Database className="mr-2 h-4 w-4 animate-spin" />
-                                    Đang xử lý...
-                                </>
-                            ) : (
-                                <>
-                                    <Database className="mr-2 h-4 w-4" />
-                                    Tạo & Lưu Đơn Hàng
-                                </>
-                            )}
-                        </Button>
+                        {canCreate && (
+                            <Button
+                                className="w-full"
+                                size="lg"
+                                onClick={handleCreateOrders}
+                                disabled={isGenerating || customers.length === 0 || products.length === 0}
+                            >
+                                {isGenerating ? (
+                                    <>
+                                        <Database className="mr-2 h-4 w-4 animate-spin" />
+                                        Đang xử lý...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Database className="mr-2 h-4 w-4" />
+                                        Tạo & Lưu Đơn Hàng
+                                    </>
+                                )}
+                            </Button>
+                        )}
+
+                        {isGenerating && progress.total > 0 && (
+                            <div className="space-y-2">
+                                <div className="flex justify-between text-sm">
+                                    <span className="text-muted-foreground">{progress.phase}</span>
+                                    <span className="font-medium">{Math.round((progress.current / progress.total) * 100)}%</span>
+                                </div>
+                                <Progress value={(progress.current / progress.total) * 100} />
+                            </div>
+                        )}
 
                         {batchStats && (
                             <div className="p-4 bg-slate-50 rounded-lg space-y-2 text-sm">
@@ -343,7 +380,7 @@ const Index = () => {
             </div>
 
             {/* Adjustment Section */}
-            <OrderAdjustmentSection
+            {canCreate && <OrderAdjustmentSection
                 batchId={adjustConfig.batchId}
                 adjustConfig={adjustConfig}
                 setAdjustConfig={setAdjustConfig}
@@ -364,7 +401,7 @@ const Index = () => {
                 }}
                 isProcessing={isAdjusting}
                 onLoadStats={loadBatchStats}
-            />
+            />}
 
             {/* Order List Section */}
             <Card>

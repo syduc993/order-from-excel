@@ -1,28 +1,13 @@
 import { Customer, Product } from '@/types/excel';
 import { ApiOrderRequest, ApiProduct } from '@/types/api';
-import { DEFAULT_DEPOT_ID } from './constants';
 import { validateCustomerId, validateProductId } from './validation';
-
-interface OrderGenerationConfig {
-  minTotalAmount: number; // 300,000
-  maxTotalAmount: number; // 1,000,000
-  minProductsPerOrder: number; // 1
-  maxProductsPerOrder: number; // 5
-  minQuantityPerProduct: number; // 1
-  maxQuantityPerProduct: number; // 3
-}
+import { DEFAULT_SETTINGS, type OrderRulesConfig } from '@/types/settings';
 
 export function generateRandomOrder(
   customer: Customer,
   products: Product[],
-  config: OrderGenerationConfig = {
-    minTotalAmount: 300000,
-    maxTotalAmount: 2000000, // Increased from 1M to 2M
-    minProductsPerOrder: 1,
-    maxProductsPerOrder: 5,
-    minQuantityPerProduct: 1,
-    maxQuantityPerProduct: 3,
-  }
+  config: OrderRulesConfig = DEFAULT_SETTINGS.orderRules,
+  depotId: number = DEFAULT_SETTINGS.apiConfig.depotId
 ): { order: ApiOrderRequest; totalAmount: number; usedProducts: Map<number, number> } | null {
   // 1. Validate Customer ID
   const customerValidation = validateCustomerId(customer);
@@ -164,7 +149,7 @@ export function generateRandomOrder(
   }));
 
   const order: ApiOrderRequest = {
-    depotId: DEFAULT_DEPOT_ID,
+    depotId,
     customer: {
       id: customerId,
     },

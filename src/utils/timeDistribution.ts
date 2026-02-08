@@ -1,4 +1,5 @@
 // Utility để phân bổ thời gian cho đơn hàng theo giờ trong ngày
+import { DEFAULT_SETTINGS, type TimeDistributionConfig } from '@/types/settings';
 
 interface TimeSlot {
   start: number; // Giờ bắt đầu (0-23)
@@ -6,17 +7,8 @@ interface TimeSlot {
   weight: number; // Trọng số (cao điểm = nhiều đơn hơn)
 }
 
-// Khung giờ hoạt động chính: 8h30 - 22h45
-export const TIME_SLOTS: TimeSlot[] = [
-  { start: 8.5, end: 10, weight: 1 }, // 8h30-10h: Bình thường
-  { start: 10, end: 12, weight: 3 }, // 10h-12h: CAO ĐIỂM
-  { start: 12, end: 14, weight: 0.3 }, // 12h-14h: RẤT THẤP
-  { start: 14, end: 16, weight: 1 }, // 14h-16h: Bình thường
-  { start: 16, end: 18, weight: 3 }, // 16h-18h: CAO ĐIỂM
-  { start: 18, end: 20, weight: 1 }, // 18h-20h: Bình thường
-  { start: 20, end: 21.5, weight: 3 }, // 20h-21h30: CAO ĐIỂM (thực tế chỉ đến 21h30 là đông)
-  { start: 21.5, end: 22.75, weight: 0.8 }, // 21h30-22h45: Giảm dần (chuẩn bị đóng cửa)
-];
+// Default TIME_SLOTS (fallback khi không truyền config)
+export const TIME_SLOTS: TimeSlot[] = DEFAULT_SETTINGS.timeDistribution.timeSlots;
 
 // Kiểm tra xem có phải cuối tuần không (Thứ 7 = 6, Chủ Nhật = 0)
 function isWeekend(date: Date): boolean {
@@ -25,8 +17,8 @@ function isWeekend(date: Date): boolean {
 }
 
 // Tính weight theo ngày (cuối tuần nhiều bill hơn)
-export function getDayWeight(date: Date): number {
-  return isWeekend(date) ? 1.8 : 1.0; // Cuối tuần tăng 80%
+export function getDayWeight(date: Date, weekendBoost: number = DEFAULT_SETTINGS.timeDistribution.weekendBoost): number {
+  return isWeekend(date) ? weekendBoost : 1.0;
 }
 
 // Tính số lượng đơn hàng cho mỗi ngày dựa trên weight

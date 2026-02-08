@@ -577,4 +577,59 @@ export class SupabaseService {
             productQuantityByDate,
         };
     }
+
+    // ==================== Settings Methods ====================
+
+    async getSettings(): Promise<Record<string, any>> {
+        const { data, error } = await this.client
+            .from('app_settings')
+            .select('key, value');
+
+        if (error) {
+            console.error('Failed to load settings:', error.message);
+            return {};
+        }
+
+        const settings: Record<string, any> = {};
+        for (const row of data || []) {
+            settings[row.key] = row.value;
+        }
+        return settings;
+    }
+
+    async updateSetting(key: string, value: any, updatedBy?: string): Promise<void> {
+        const { error } = await this.client
+            .from('app_settings')
+            .upsert({
+                key,
+                value,
+                updated_by: updatedBy || null,
+            }, { onConflict: 'key' });
+
+        if (error) throw new Error(`Failed to save setting "${key}": ${error.message}`);
+    }
+
+    // ==================== Batch List Methods ====================
+
+    async getRecentBatches(limit: number = 20): Promise<Array<{
+        id: string;
+        start_date: string;
+        end_date: string;
+        total_orders: number;
+        status: string;
+        created_at: string;
+    }>> {
+        const { data, error } = await this.client
+            .from('order_batches')
+            .select('id, start_date, end_date, total_orders, status, created_at')
+            .order('created_at', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            console.error('Failed to fetch recent batches:', error.message);
+            return [];
+        }
+
+        return data || [];
+    }
 }

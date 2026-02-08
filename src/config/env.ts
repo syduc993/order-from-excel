@@ -11,6 +11,9 @@ export const env = {
     businessId: import.meta.env.VITE_NHANH_BUSINESS_ID || '',
     accessToken: import.meta.env.VITE_NHANH_ACCESS_TOKEN || '',
   },
+  portal: {
+    backendUrl: import.meta.env.VITE_PORTAL_BACKEND_URL || '',
+  },
 } as const;
 
 // Validate required environment variables
