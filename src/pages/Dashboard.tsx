@@ -1,13 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { SupabaseService } from '@/services/supabase';
-import { env } from '@/config/env';
+import { getSupabaseService } from '@/services/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { DatePicker } from '@/components/DatePicker';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import {
     BarChart,
@@ -27,7 +32,9 @@ import {
     Cell,
     ComposedChart
 } from 'recharts';
-import { Loader2, Filter } from 'lucide-react';
+import { Loader2, Filter, Download } from 'lucide-react';
+import { DashboardSummary } from '@/components/DashboardSummary';
+import { exportDashboardToExcel } from '@/utils/excelExport';
 import {
     Table,
     TableBody,
@@ -39,11 +46,16 @@ import {
     TableRow,
 } from "@/components/ui/table"
 import { convertHourToVietnam, normalizeDate, formatDateForDisplay } from '@/utils/dateUtils';
+import { TablePagination } from '@/components/TablePagination';
 
 const Dashboard = () => {
     const [batchId, setBatchId] = useState('');
-    const [startDate, setStartDate] = useState<Date | undefined>(undefined);
-    const [endDate, setEndDate] = useState<Date | undefined>(undefined);
+    const [startDate, setStartDate] = useState<Date | undefined>(() => {
+        const d = new Date();
+        d.setDate(d.getDate() - 7);
+        return d;
+    });
+    const [endDate, setEndDate] = useState<Date | undefined>(() => new Date());
     const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
 
     const handleStatusChange = (status: string, checked: boolean | 'indeterminate') => {
@@ -54,17 +66,39 @@ const Dashboard = () => {
         }
     };
 
-    // Supabase configuration
-    const supabaseConfig = (() => {
-        if (env.supabase.url && env.supabase.anonKey) {
-            return { url: env.supabase.url, key: env.supabase.anonKey };
-        }
-        return null;
-    })();
+    const supabaseService = getSupabaseService();
 
-    const supabaseService = useMemo(() => {
-        return supabaseConfig ? new SupabaseService(supabaseConfig) : null;
-    }, [supabaseConfig]);
+    const { data: recentBatches } = useQuery({
+        queryKey: ['recentBatchesForDropdown'],
+        queryFn: async () => {
+            if (!supabaseService) return [];
+            return await supabaseService.getRecentBatches(50);
+        },
+        enabled: !!supabaseService,
+    });
+
+    const formatBatchDate = (dateStr: string) => {
+        if (!dateStr) return '';
+        // Parse YYYY-MM-DD directly to avoid timezone shift
+        const [y, m, d] = dateStr.split('-');
+        if (y && m && d) return `${d}/${m}/${y}`;
+        return new Date(dateStr).toLocaleDateString('vi-VN', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            timeZone: 'Asia/Ho_Chi_Minh',
+        });
+    };
+
+    const formatCreatedAt = (dateStr: string) => {
+        if (!dateStr) return '';
+        return new Date(dateStr).toLocaleDateString('vi-VN', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            timeZone: 'Asia/Ho_Chi_Minh',
+        });
+    };
 
     const { data: aggregatedStats, isLoading, refetch } = useQuery({
         queryKey: ['dashboardStats', batchId, startDate, endDate, selectedStatuses],
@@ -167,6 +201,26 @@ const Dashboard = () => {
         }), { revenue: 0, quantity: 0 });
     }, [dailyStats]);
 
+    // Pagination for daily stats table
+    const [dailyStatsPage, setDailyStatsPage] = useState(1);
+    const [dailyStatsPageSize, setDailyStatsPageSize] = useState(10);
+
+    // Clamp page to valid range when data changes
+    const safeDailyStatsPage = useMemo(() => {
+        const maxPage = Math.max(1, Math.ceil(dailyStats.length / dailyStatsPageSize));
+        return Math.min(dailyStatsPage, maxPage);
+    }, [dailyStats.length, dailyStatsPage, dailyStatsPageSize]);
+
+    const paginatedDailyStats = useMemo(() => {
+        const start = (safeDailyStatsPage - 1) * dailyStatsPageSize;
+        return dailyStats.slice(start, start + dailyStatsPageSize);
+    }, [dailyStats, safeDailyStatsPage, dailyStatsPageSize]);
+
+    const handleDailyStatsPageSizeChange = useCallback((size: number) => {
+        setDailyStatsPageSize(size);
+        setDailyStatsPage(1);
+    }, []);
+
     return (
         <div className="container mx-auto p-6 space-y-6">
             <div className="flex items-center gap-4">
@@ -183,12 +237,23 @@ const Dashboard = () => {
                 <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                         <div className="space-y-2">
-                            <Label>Batch ID (Tùy chọn)</Label>
-                            <Input
-                                placeholder="Nhập Batch ID..."
+                            <Label>Batch (Tùy chọn)</Label>
+                            <Select
                                 value={batchId}
-                                onChange={(e) => setBatchId(e.target.value)}
-                            />
+                                onValueChange={(val) => setBatchId(val === '__all__' ? '' : val)}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Tất cả batch" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="__all__">Tất cả batch</SelectItem>
+                                    {recentBatches?.map((batch) => (
+                                        <SelectItem key={batch.id} value={batch.id}>
+                                            Tạo {formatCreatedAt(batch.created_at)} | Đơn: {formatBatchDate(batch.start_date)} — {formatBatchDate(batch.end_date)} ({batch.total_orders} đơn)
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                         <div className="space-y-2">
                             <Label>Từ Ngày</Label>
@@ -207,6 +272,14 @@ const Dashboard = () => {
                         <div className="space-y-2 col-span-full">
                             <Label>Trạng Thái</Label>
                             <div className="flex flex-wrap gap-4">
+                                <div className="flex items-center space-x-2">
+                                    <Checkbox
+                                        id="draft"
+                                        checked={selectedStatuses.includes('draft')}
+                                        onCheckedChange={(checked) => handleStatusChange('draft', checked)}
+                                    />
+                                    <Label htmlFor="draft" className="text-sm font-normal cursor-pointer">Draft</Label>
+                                </div>
                                 <div className="flex items-center space-x-2">
                                     <Checkbox
                                         id="completed"
@@ -242,13 +315,34 @@ const Dashboard = () => {
                             </div>
                         </div>
                     </div>
-                    <div className="mt-4 flex justify-end">
+                    <div className="mt-4 flex justify-end gap-2">
                         <Button onClick={handleSearch} disabled={isLoading}>
                             {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Áp Dụng Bộ Lọc'}
                         </Button>
+                        {aggregatedStats && (
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    exportDashboardToExcel(aggregatedStats, batchId || undefined);
+                                    toast.success('Đã xuất báo cáo ra Excel');
+                                }}
+                            >
+                                <Download className="mr-2 h-4 w-4" />
+                                Xuất Báo Cáo
+                            </Button>
+                        )}
                     </div>
                 </CardContent>
             </Card>
+
+            {aggregatedStats && (
+                <DashboardSummary
+                    totalOrders={statusBreakdown.reduce((sum: number, s: any) => sum + s.value, 0)}
+                    completedOrders={statusBreakdown.find((s: any) => s.name === 'Completed')?.value || 0}
+                    totalRevenue={totalStats.revenue}
+                    totalQuantity={totalStats.quantity}
+                />
+            )}
 
             {aggregatedStats && (statusBreakdown.length > 0 || histogramCount.length > 0 || revenueByDate.length > 0) ? (
                 <div className="space-y-6">
@@ -323,6 +417,7 @@ const Dashboard = () => {
                                         <YAxis />
                                         <Tooltip labelFormatter={(value) => `Giờ ${value}h`} />
                                         <Legend />
+                                        <Bar dataKey="draft" name="Draft" stackId="a" fill="#a855f7" />
                                         <Bar dataKey="completed" name="Completed" stackId="a" fill="#22c55e" />
                                         <Bar dataKey="pending" name="Pending" stackId="a" fill="#eab308" />
                                         <Bar dataKey="cancelled" name="Cancelled" stackId="a" fill="#6b7280" />
@@ -344,6 +439,7 @@ const Dashboard = () => {
                                         <YAxis />
                                         <Tooltip />
                                         <Legend />
+                                        <Bar dataKey="draft_quantity" name="Draft" stackId="a" fill="#a855f7" />
                                         <Bar dataKey="completed_quantity" name="Completed" stackId="a" fill="#22c55e" />
                                         <Bar dataKey="pending_quantity" name="Pending" stackId="a" fill="#eab308" />
                                         <Bar dataKey="cancelled_quantity" name="Cancelled" stackId="a" fill="#6b7280" />
@@ -374,6 +470,7 @@ const Dashboard = () => {
                                             formatter={(value) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value as number)}
                                         />
                                         <Legend />
+                                        <Bar dataKey="draft" name="Draft" stackId="a" fill="#a855f7" />
                                         <Bar dataKey="completed" name="Completed" stackId="a" fill="#22c55e" />
                                         <Bar dataKey="pending" name="Pending" stackId="a" fill="#eab308" />
                                         <Bar dataKey="cancelled" name="Cancelled" stackId="a" fill="#6b7280" />
@@ -424,22 +521,17 @@ const Dashboard = () => {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {dailyStats.map((stat) => {
-                                        // Format date for display (YYYY-MM-DD -> DD/MM/YYYY)
-
-
-                                        return (
-                                            <TableRow key={stat.date}>
-                                                <TableCell className="font-medium">{formatDateForDisplay(stat.date)}</TableCell>
-                                                <TableCell className="text-right">
-                                                    {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(stat.revenue)}
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    {new Intl.NumberFormat('vi-VN').format(stat.quantity)}
-                                                </TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
+                                    {paginatedDailyStats.map((stat) => (
+                                        <TableRow key={stat.date}>
+                                            <TableCell className="font-medium">{formatDateForDisplay(stat.date)}</TableCell>
+                                            <TableCell className="text-right">
+                                                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(stat.revenue)}
+                                            </TableCell>
+                                            <TableCell className="text-right">
+                                                {new Intl.NumberFormat('vi-VN').format(stat.quantity)}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
                                 </TableBody>
                                 <TableFooter>
                                     <TableRow>
@@ -453,6 +545,14 @@ const Dashboard = () => {
                                     </TableRow>
                                 </TableFooter>
                             </Table>
+                            <TablePagination
+                                page={safeDailyStatsPage}
+                                pageSize={dailyStatsPageSize}
+                                totalItems={dailyStats.length}
+                                onPageChange={setDailyStatsPage}
+                                onPageSizeChange={handleDailyStatsPageSizeChange}
+                                itemLabel="ngày"
+                            />
                         </CardContent>
                     </Card>
                 </div>

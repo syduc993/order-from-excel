@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { SupabaseService } from '@/services/supabase';
-import { env } from '@/config/env';
+import { getSupabaseService } from '@/services/supabase';
 
 export const useOrderData = () => {
     const [batchStats, setBatchStats] = useState<any>(null);
@@ -13,33 +12,30 @@ export const useOrderData = () => {
         count: number;
     } | null>(null);
     const [isLoadingOrders, setIsLoadingOrders] = useState(false);
-    const [ordersFilter, setOrdersFilter] = useState<{
-        status?: string;
-        orderBy?: string;
-        ascending?: boolean;
-    }>({});
 
-    // Supabase configuration
-    const supabaseConfig = (() => {
-        if (env.supabase.url && env.supabase.anonKey) {
-            return {
-                url: env.supabase.url,
-                key: env.supabase.anonKey,
-            };
+    const loadOrders = async (
+        batchId: string,
+        page: number = 1,
+        pageSize: number = 10,
+        filters?: {
+            statuses?: string[];
+            searchText?: string;
+            dateFrom?: Date;
+            dateTo?: Date;
         }
-        return null;
-    })();
-
-    const loadOrders = async (batchId: string, page: number = 1, pageSize: number = 5) => {
-        if (!supabaseConfig) return;
+    ) => {
+        const supabaseService = getSupabaseService();
+        if (!supabaseService) return;
 
         setIsLoadingOrders(true);
         try {
-            const supabaseService = new SupabaseService(supabaseConfig);
             const result = await supabaseService.getOrders(batchId, {
                 page,
                 pageSize,
-                ...ordersFilter,
+                statuses: filters?.statuses,
+                searchText: filters?.searchText,
+                dateFrom: filters?.dateFrom,
+                dateTo: filters?.dateTo,
             });
 
             setOrders(result.data);
@@ -57,13 +53,13 @@ export const useOrderData = () => {
     };
 
     const loadBatchStats = async (batchId: string) => {
-        if (!supabaseConfig) {
+        const supabaseService = getSupabaseService();
+        if (!supabaseService) {
             toast.error('Vui lòng cấu hình Supabase trong file .env');
             return;
         }
 
         try {
-            const supabaseService = new SupabaseService(supabaseConfig);
             const stats = await supabaseService.getBatchStats(batchId);
             const batch = await supabaseService.getBatch(batchId);
             setBatchStats({ ...stats, batch });
@@ -81,8 +77,6 @@ export const useOrderData = () => {
         orders,
         ordersPagination,
         isLoadingOrders,
-        ordersFilter,
-        setOrdersFilter,
         loadBatchStats,
         loadOrders,
     };

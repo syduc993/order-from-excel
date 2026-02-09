@@ -10,6 +10,11 @@ import { AppLayout } from "@/components/AppLayout";
 import Index from "./pages/Index";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
+import Help from "./pages/Help";
+import AuditLog from "./pages/AuditLog";
+import Batches from "./pages/Batches";
+import BatchAnalysis from "./pages/BatchAnalysis";
+import DataManagement from "./pages/DataManagement";
 import Unauthorized from "./pages/Unauthorized";
 import NotFound from "./pages/NotFound";
 
@@ -28,12 +33,28 @@ const App = () => (
             <Route element={<ProtectedRoute requiredLevel="view" />}>
               <Route element={<AppLayout />}>
                 <Route path="/" element={<Index />} />
+                <Route path="/customers" element={
+                    <ProtectedRoute requiredLevel="create">
+                      <DataManagement />
+                    </ProtectedRoute>
+                  } />
                 <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/help" element={<Help />} />
+                <Route path="/batches" element={<Batches />} />
+                <Route path="/batch-analysis/:batchId" element={<BatchAnalysis />} />
                 <Route
                   path="/settings"
                   element={
                     <ProtectedRoute requiredLevel="manage">
                       <Settings />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/audit"
+                  element={
+                    <ProtectedRoute requiredLevel="manage">
+                      <AuditLog />
                     </ProtectedRoute>
                   }
                 />

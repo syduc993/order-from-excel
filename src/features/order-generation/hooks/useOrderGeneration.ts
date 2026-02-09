@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { toast } from 'sonner';
-import { SupabaseService } from '@/services/supabase';
+import { getSupabaseService } from '@/services/supabase';
 import { Customer, Product } from '@/types/excel';
 import { ApiOrderRequest, ApiProduct } from '@/types/api';
 import { adjustProductsToInventory } from '@/utils/inventoryValidator';
 import { calculateTotalOrders } from '@/utils/orderUtils';
 import { calculateOrdersPerDay, distributeOrdersToDays } from '@/utils/timeDistribution';
 import { generateRandomOrder } from '@/utils/orderGenerator';
-import { env } from '@/config/env';
 import { useSettings } from '@/contexts/SettingsContext';
+import { getActiveDepot } from '@/types/settings';
 
 interface UseOrderGenerationProps {
     customers: Customer[];
@@ -20,6 +20,7 @@ interface UseOrderGenerationProps {
     inventoryMap: Map<number, number>;
     useActualInventory: boolean;
     onSuccess: (batchId: string) => void;
+    onPhaseChange?: (phase: string) => void;
 }
 
 export const useOrderGeneration = ({
@@ -29,6 +30,7 @@ export const useOrderGeneration = ({
     inventoryMap,
     useActualInventory,
     onSuccess,
+    onPhaseChange,
 }: UseOrderGenerationProps) => {
     const [isProcessing, setIsProcessing] = useState(false);
     const [progress, setProgress] = useState<{ current: number; total: number; phase: string }>({
@@ -36,19 +38,9 @@ export const useOrderGeneration = ({
     });
     const { settings } = useSettings();
 
-    // Supabase configuration
-    const supabaseConfig = (() => {
-        if (env.supabase.url && env.supabase.anonKey) {
-            return {
-                url: env.supabase.url,
-                key: env.supabase.anonKey,
-            };
-        }
-        return null;
-    })();
-
     const handleSupabaseExport = async () => {
-        if (!supabaseConfig) {
+        const supabaseService = getSupabaseService();
+        if (!supabaseService) {
             toast.error('Vui lòng cấu hình Supabase trong file .env');
             return;
         }
@@ -68,7 +60,6 @@ export const useOrderGeneration = ({
         if (useActualInventory && inventoryMap.size > 0) {
             productsToUse = adjustProductsToInventory(products, inventoryMap);
             toast.info('Sử dụng số lượng tồn kho thực tế từ NhanhVN');
-            console.log('📦 Using adjusted inventory:', productsToUse.map(p => ({ id: p.id, original: products.find(op => op.id === p.id)?.quantity, adjusted: p.quantity })));
         }
 
         // Tính số lượng đơn hàng tự động từ sản phẩm
@@ -84,9 +75,13 @@ export const useOrderGeneration = ({
         }
 
         setIsProcessing(true);
-        setProgress({ current: 0, total: 3, phase: 'Đang tạo đơn hàng...' });
+        const activeDepot = getActiveDepot(settings.apiConfig);
+        const depotLabel = activeDepot.name || `Depot ${activeDepot.depotId}`;
+        toast.info(`Đang tạo đơn cho kho: ${depotLabel} (ID: ${activeDepot.depotId})`);
+        setProgress({ current: 0, total: 3, phase: `Đang tạo đơn hàng cho ${depotLabel}...` });
+        onPhaseChange?.('create_orders');
         try {
-            const supabaseService = new SupabaseService(supabaseConfig);
+            // supabaseService already checked above
 
             // 1. Tạo batch (lưu kèm thông tin sản phẩm)
             const batch = await supabaseService.createBatch(
@@ -103,11 +98,6 @@ export const useOrderGeneration = ({
                 scheduleConfig.startDate,
                 scheduleConfig.endDate
             );
-
-            console.log('Phân bổ đơn hàng theo ngày (tham khảo):', ordersPerDay.map(d => ({
-                date: d.date.toLocaleDateString('vi-VN'),
-                count: d.orderCount
-            })));
 
             // 3. Tạo TẤT CẢ đơn hàng trước (chưa gán scheduledTime)
             const ordersWithoutTime: Array<{
@@ -141,7 +131,6 @@ export const useOrderGeneration = ({
                 // Nếu giá trị còn lại < minTotalAmount, dừng để vét sau
                 const totalRemainingValue = availableProducts.reduce((sum, p) => sum + (p.quantity * p.price), 0);
                 if (totalRemainingValue < settings.orderRules.minTotalAmount) {
-                    console.log(`Total remaining value < ${settings.orderRules.minTotalAmount}, switching to sweep logic...`);
                     break;
                 }
 
@@ -187,14 +176,14 @@ export const useOrderGeneration = ({
                 } else {
                     consecutiveFailCount++;
 
-                    // Sau một số lần thất bại, thử flexible mode (mở rộng biên)
+                    // Sau một số lần thất bại, thử flexible mode (nới nhẹ biên, tránh bimodal)
                     if (consecutiveFailCount >= maxConsecutiveFails) {
                         const flexibleResult = generateRandomOrder(randomCustomer, currentInventory, {
                             ...settings.orderRules,
-                            minTotalAmount: Math.floor(settings.orderRules.minTotalAmount / 3),
-                            maxTotalAmount: Math.floor(settings.orderRules.maxTotalAmount * 1.5),
-                            maxProductsPerOrder: settings.orderRules.maxProductsPerOrder + 3,
-                            maxQuantityPerProduct: settings.orderRules.maxQuantityPerProduct + 2,
+                            minTotalAmount: Math.floor(settings.orderRules.minTotalAmount * 0.7),
+                            maxTotalAmount: Math.floor(settings.orderRules.maxTotalAmount * 1.2),
+                            maxProductsPerOrder: settings.orderRules.maxProductsPerOrder + 2,
+                            maxQuantityPerProduct: settings.orderRules.maxQuantityPerProduct + 1,
                         }, settings.apiConfig.depotId);
 
                         if (flexibleResult) {
@@ -231,10 +220,8 @@ export const useOrderGeneration = ({
                 }
             }
 
-            console.log(`✅ Đã tạo ${ordersWithoutTime.length} đơn hàng (chưa phân bổ thời gian)`);
-            console.log(`📦 Inventory còn lại:`, currentInventory.filter(p => p.quantity > 0).length, 'sản phẩm');
-
             setProgress({ current: 1, total: 3, phase: 'Đang vét sản phẩm còn lại...' });
+            onPhaseChange?.('sweep');
 
             // 4. Vét các sản phẩm còn thừa (nếu có) - Tạo đơn vét (chưa gán thời gian)
             const remainingProducts = currentInventory.filter(p => p.quantity > 0);
@@ -334,6 +321,7 @@ export const useOrderGeneration = ({
 
             // 5. Phân bổ tất cả đơn hàng cho các ngày
             setProgress({ current: 2, total: 3, phase: 'Đang phân bổ thời gian...' });
+            onPhaseChange?.('distribute');
             toast.info(`Đang phân bổ ${ordersWithoutTime.length} đơn hàng cho các ngày...`);
 
             const orders: Array<{
@@ -350,13 +338,7 @@ export const useOrderGeneration = ({
             const mainOrders = ordersWithoutTime.filter(o => !o.isSweep);
             const sweepOrders = ordersWithoutTime.filter(o => o.isSweep);
 
-            console.log(`📊 Phân bổ đơn hàng:`);
-            console.log(`  - Đơn hàng chính: ${mainOrders.length}`);
-            console.log(`  - Đơn vét: ${sweepOrders.length}`);
-            console.log(`  - Tổng số ngày cần phân bổ: ${ordersPerDay.length} ngày (${scheduleConfig.startDate.toLocaleDateString('vi-VN')} - ${scheduleConfig.endDate.toLocaleDateString('vi-VN')})`);
-
             // Phân bổ đơn hàng chính theo weight (ưu tiên cuối tuần và khung giờ cao điểm)
-            console.log(`🔄 Đang phân bổ ${mainOrders.length} đơn hàng chính...`);
             const distributedMainOrders = distributeOrdersToDays(
                 mainOrders,
                 ordersPerDay,
@@ -366,17 +348,8 @@ export const useOrderGeneration = ({
             );
             orders.push(...distributedMainOrders);
 
-            // Log phân bổ đơn chính theo ngày
-            const mainOrdersByDay = new Map<string, number>();
-            distributedMainOrders.forEach(order => {
-                const dateKey = order.scheduledTime.toLocaleDateString('vi-VN');
-                mainOrdersByDay.set(dateKey, (mainOrdersByDay.get(dateKey) || 0) + 1);
-            });
-            console.log(`✅ Phân bổ đơn chính theo ngày:`, Array.from(mainOrdersByDay.entries()).map(([date, count]) => ({ date, count })));
-
             // Phân bổ đơn vét vào khung giờ cao điểm cuối tuần (hoặc gần cuối tuần)
             if (sweepOrders.length > 0) {
-                console.log(`🔄 Đang phân bổ ${sweepOrders.length} đơn vét vào khung giờ cao điểm cuối tuần...`);
                 const distributedSweepOrders = distributeOrdersToDays(
                     sweepOrders,
                     ordersPerDay,
@@ -385,46 +358,10 @@ export const useOrderGeneration = ({
                     true // isSweepOrder = true
                 );
                 orders.push(...distributedSweepOrders);
-
-                // Log phân bổ đơn vét theo ngày
-                const sweepOrdersByDay = new Map<string, number>();
-                distributedSweepOrders.forEach(order => {
-                    const dateKey = order.scheduledTime.toLocaleDateString('vi-VN');
-                    sweepOrdersByDay.set(dateKey, (sweepOrdersByDay.get(dateKey) || 0) + 1);
-                });
-                console.log(`✅ Phân bổ đơn vét theo ngày:`, Array.from(sweepOrdersByDay.entries()).map(([date, count]) => ({ date, count })));
             }
 
             // Sắp xếp lại theo scheduledTime
             orders.sort((a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime());
-
-            // Log phân bổ tổng hợp theo ngày
-            const ordersByDay = new Map<string, { count: number; totalAmount: number }>();
-            orders.forEach(order => {
-                const dateKey = order.scheduledTime.toLocaleDateString('vi-VN');
-                const current = ordersByDay.get(dateKey) || { count: 0, totalAmount: 0 };
-                ordersByDay.set(dateKey, {
-                    count: current.count + 1,
-                    totalAmount: current.totalAmount + order.totalAmount
-                });
-            });
-
-            console.log(`📈 TỔNG HỢP PHÂN BỔ ĐƠN HÀNG THEO NGÀY:`);
-            Array.from(ordersByDay.entries())
-                .sort((a, b) => new Date(a[0].split('/').reverse().join('-')).getTime() - new Date(b[0].split('/').reverse().join('-')).getTime())
-                .forEach(([date, stats]) => {
-                    console.log(`  ${date}: ${stats.count} đơn, ${stats.totalAmount.toLocaleString('vi-VN')} ₫`);
-                });
-
-            // Kiểm tra xem có ngày nào thiếu đơn không
-            const allDays = ordersPerDay.map(d => d.date.toLocaleDateString('vi-VN'));
-            const daysWithOrders = Array.from(ordersByDay.keys());
-            const missingDays = allDays.filter(day => !daysWithOrders.includes(day));
-            if (missingDays.length > 0) {
-                console.warn(`⚠️ CẢNH BÁO: Các ngày sau KHÔNG có đơn hàng:`, missingDays);
-            } else {
-                console.log(`✅ Tất cả các ngày đều có đơn hàng!`);
-            }
 
             if (currentInventory.some(p => p.quantity > 0)) {
                 const remainingItems = currentInventory.reduce((sum, p) => sum + p.quantity, 0);
@@ -438,6 +375,7 @@ export const useOrderGeneration = ({
 
             // 4. Lưu vào Supabase (chia nhỏ để tránh timeout)
             setProgress({ current: 3, total: 3, phase: 'Đang lưu vào database...' });
+            onPhaseChange?.('save_db');
             toast.info(`Đang lưu ${orders.length} đơn hàng vào Supabase...`);
             const batchSize = 100;
             for (let i = 0; i < orders.length; i += batchSize) {
@@ -446,11 +384,14 @@ export const useOrderGeneration = ({
                 toast.info(`Đã lưu ${Math.min(i + batchSize, orders.length)}/${orders.length} đơn hàng...`);
             }
 
+            // Cập nhật total_orders thực tế (có thể khác estimate ban đầu do sweep)
+            await supabaseService.updateBatchTotalOrders(batchId, orders.length);
+
             setProgress({ current: 3, total: 3, phase: 'Hoàn thành!' });
             onSuccess(batchId);
             toast.success(
-                `Đã lưu ${orders.length} đơn hàng vào Supabase thành công! ` +
-                `Batch ID: ${batchId}`
+                `Đã tạo ${orders.length} đơn nháp thành công! ` +
+                `Vui lòng review và duyệt để đơn được xử lý. Batch: ${batchId}`
             );
 
         } catch (error) {

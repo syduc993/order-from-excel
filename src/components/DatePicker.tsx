@@ -17,6 +17,8 @@ interface DatePickerProps {
   onDateChange: (date: Date | undefined) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Disable all dates before this date */
+  fromDate?: Date;
 }
 
 export function DatePicker({
@@ -24,6 +26,7 @@ export function DatePicker({
   onDateChange,
   placeholder = "Chọn ngày",
   disabled = false,
+  fromDate,
 }: DatePickerProps) {
   return (
     <Popover>
@@ -45,6 +48,7 @@ export function DatePicker({
           mode="single"
           selected={date || undefined}
           onSelect={(selectedDate) => onDateChange(selectedDate)}
+          disabled={fromDate ? { before: fromDate } : undefined}
           initialFocus
         />
       </PopoverContent>

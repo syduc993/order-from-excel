@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { Product } from '@/types/excel';
 import { ApiOrderRequest } from '@/types/api';
+import { CustomerList, CustomerListItem, CustomerListItemInsert } from '@/types/dataManagement';
 import {
     calculateStatusBreakdown,
     calculateHistogramCount,
@@ -23,7 +24,7 @@ export interface OrderQueueItem {
     customer_phone: string;
     order_data: ApiOrderRequest;
     scheduled_time: string;
-    status: 'pending' | 'completed' | 'failed' | 'cancelled';
+    status: 'draft' | 'pending' | 'completed' | 'failed' | 'cancelled';
     created_at?: string;
     updated_at?: string;
     error_message?: string;
@@ -33,6 +34,7 @@ export interface OrderQueueItem {
 
 export interface BatchStats {
     totalOrders: number;
+    draftOrders: number;
     completedOrders: number;
     pendingOrders: number;
     failedOrders: number;
@@ -48,6 +50,9 @@ export interface DashboardStatsFilter {
     statuses?: string[];
 }
 
+// TODO: Enable Row-Level Security (RLS) on Supabase tables (order_batches, orders_queue, app_settings, audit_logs).
+// Currently all operations use anon key without server-side authorization.
+// Add RLS policies to restrict access based on authenticated user role.
 export class SupabaseService {
     public client: SupabaseClient;
 
@@ -64,12 +69,21 @@ export class SupabaseService {
     ): Promise<{ id: string }> {
         const batchId = `batch_${Date.now()}`;
 
+        // Format dates in local timezone to avoid UTC shift
+        // (e.g. 09/02 VN time would become 08/02 with toISOString)
+        const formatLocal = (d: Date) => {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        };
+
         const { error } = await this.client
             .from('order_batches')
             .insert({
                 id: batchId,
-                start_date: startDate.toISOString().split('T')[0],
-                end_date: endDate.toISOString().split('T')[0],
+                start_date: formatLocal(startDate),
+                end_date: formatLocal(endDate),
                 total_orders: totalOrders,
                 status: 'pending',
                 products_data: products, // Store products as JSONB
@@ -103,6 +117,7 @@ export class SupabaseService {
 
         const stats: BatchStats = {
             totalOrders: data?.length || 0,
+            draftOrders: 0,
             completedOrders: 0,
             pendingOrders: 0,
             failedOrders: 0,
@@ -115,6 +130,9 @@ export class SupabaseService {
             stats.totalRevenue += order.total_amount || 0;
 
             switch (order.status) {
+                case 'draft':
+                    stats.draftOrders++;
+                    break;
                 case 'completed':
                     stats.completedOrders++;
                     stats.completedRevenue += order.total_amount || 0;
@@ -141,6 +159,10 @@ export class SupabaseService {
             page?: number;
             pageSize?: number;
             status?: string;
+            statuses?: string[];
+            searchText?: string;
+            dateFrom?: Date;
+            dateTo?: Date;
             orderBy?: string;
             ascending?: boolean;
         } = {}
@@ -161,8 +183,25 @@ export class SupabaseService {
             .select('*', { count: 'exact' })
             .eq('batch_id', batchId);
 
-        if (options.status) {
+        if (options.statuses && options.statuses.length > 0) {
+            query = query.in('status', options.statuses);
+        } else if (options.status) {
             query = query.eq('status', options.status);
+        }
+
+        if (options.searchText) {
+            const search = `%${options.searchText}%`;
+            query = query.or(`customer_name.ilike.${search},customer_phone.ilike.${search}`);
+        }
+
+        if (options.dateFrom) {
+            query = query.gte('scheduled_time', options.dateFrom.toISOString());
+        }
+
+        if (options.dateTo) {
+            const endOfDay = new Date(options.dateTo);
+            endOfDay.setHours(23, 59, 59, 999);
+            query = query.lte('scheduled_time', endOfDay.toISOString());
         }
 
         if (options.orderBy) {
@@ -184,6 +223,53 @@ export class SupabaseService {
             totalPages: Math.ceil((count || 0) / pageSize),
             count: count || 0,
         };
+    }
+
+    // Get ALL orders for a batch (for export)
+    async getAllOrders(batchId: string, filters?: {
+        statuses?: string[];
+        searchText?: string;
+        dateFrom?: Date;
+        dateTo?: Date;
+    }): Promise<any[]> {
+        const pageSize = 1000;
+        let offset = 0;
+        let hasMore = true;
+        const allData: any[] = [];
+
+        while (hasMore) {
+            let query = this.client
+                .from('orders_queue')
+                .select('*')
+                .eq('batch_id', batchId)
+                .order('scheduled_time', { ascending: true })
+                .range(offset, offset + pageSize - 1);
+
+            if (filters?.statuses && filters.statuses.length > 0) {
+                query = query.in('status', filters.statuses);
+            }
+            if (filters?.searchText) {
+                const search = `%${filters.searchText}%`;
+                query = query.or(`customer_name.ilike.${search},customer_phone.ilike.${search}`);
+            }
+            if (filters?.dateFrom) {
+                query = query.gte('scheduled_time', filters.dateFrom.toISOString());
+            }
+            if (filters?.dateTo) {
+                const endOfDay = new Date(filters.dateTo);
+                endOfDay.setHours(23, 59, 59, 999);
+                query = query.lte('scheduled_time', endOfDay.toISOString());
+            }
+
+            const { data, error } = await query;
+            if (error) throw new Error(`Failed to get all orders: ${error.message}`);
+            if (!data || data.length === 0) { hasMore = false; break; }
+            allData.push(...data);
+            hasMore = data.length >= pageSize;
+            offset += pageSize;
+        }
+
+        return allData;
     }
 
     // Save orders to queue
@@ -222,7 +308,7 @@ export class SupabaseService {
             customer_phone: order.customerPhone,
             order_data: order.orderData,
             scheduled_time: order.scheduledTime.toISOString(),
-            status: 'pending' as const,
+            status: 'draft' as const,
             total_amount: order.totalAmount,
             order_index: order.orderIndex !== undefined ? order.orderIndex : startIndex + index,
         }));
@@ -234,18 +320,209 @@ export class SupabaseService {
         if (error) throw new Error(`Failed to save orders: ${error.message}`);
     }
 
-    // Cancel pending orders from a specific date
+    // Cancel pending/draft orders from a specific date
     async cancelPendingOrdersFromDate(batchId: string, fromDate: Date): Promise<any[]> {
         const { data, error } = await this.client
             .from('orders_queue')
             .update({ status: 'cancelled' })
             .eq('batch_id', batchId)
-            .eq('status', 'pending')
+            .in('status', ['pending', 'draft'])
             .gte('scheduled_time', fromDate.toISOString())
             .select();
 
         if (error) throw new Error(`Failed to cancel orders: ${error.message}`);
         return data || [];
+    }
+
+    // ==================== Draft Approval Methods ====================
+
+    // Approve all draft orders in a batch (draft → pending)
+    async approveAllDraftOrders(batchId: string): Promise<number> {
+        const { data, error } = await this.client
+            .from('orders_queue')
+            .update({ status: 'pending' })
+            .eq('batch_id', batchId)
+            .eq('status', 'draft')
+            .select('id');
+
+        if (error) throw new Error(`Failed to approve orders: ${error.message}`);
+        return data?.length || 0;
+    }
+
+    // Approve selected draft orders (draft → pending)
+    async approveSelectedOrders(orderIds: number[]): Promise<number> {
+        const { data, error } = await this.client
+            .from('orders_queue')
+            .update({ status: 'pending' })
+            .in('id', orderIds)
+            .eq('status', 'draft')
+            .select('id');
+
+        if (error) throw new Error(`Failed to approve selected orders: ${error.message}`);
+        return data?.length || 0;
+    }
+
+    // ==================== Individual Order Actions ====================
+
+    // Get a single order by ID
+    async getOrderById(orderId: number): Promise<OrderQueueItem | null> {
+        const { data, error } = await this.client
+            .from('orders_queue')
+            .select('*')
+            .eq('id', orderId)
+            .single();
+
+        if (error) {
+            if (error.code === 'PGRST116') return null;
+            throw new Error(`Failed to get order: ${error.message}`);
+        }
+        return data;
+    }
+
+    // Cancel a single order (draft/pending → cancelled)
+    async cancelOrder(orderId: number): Promise<void> {
+        const { error } = await this.client
+            .from('orders_queue')
+            .update({ status: 'cancelled' })
+            .eq('id', orderId)
+            .in('status', ['draft', 'pending']);
+
+        if (error) throw new Error(`Failed to cancel order: ${error.message}`);
+    }
+
+    // Retry a failed order (failed → pending)
+    async retryFailedOrder(orderId: number): Promise<void> {
+        const { error } = await this.client
+            .from('orders_queue')
+            .update({ status: 'pending', error_message: null })
+            .eq('id', orderId)
+            .eq('status', 'failed');
+
+        if (error) throw new Error(`Failed to retry order: ${error.message}`);
+    }
+
+    // Update an order (only draft/pending)
+    async updateOrder(orderId: number, updates: {
+        customer_name?: string;
+        customer_phone?: string;
+        customer_id?: number;
+        order_data?: ApiOrderRequest;
+        scheduled_time?: string;
+        total_amount?: number;
+    }): Promise<void> {
+        const { error } = await this.client
+            .from('orders_queue')
+            .update(updates)
+            .eq('id', orderId)
+            .in('status', ['draft', 'pending']);
+
+        if (error) throw new Error(`Failed to update order: ${error.message}`);
+    }
+
+    // Delete a single order (only draft/cancelled)
+    async deleteOrder(orderId: number): Promise<void> {
+        const { error } = await this.client
+            .from('orders_queue')
+            .delete()
+            .eq('id', orderId)
+            .in('status', ['draft', 'cancelled']);
+
+        if (error) throw new Error(`Failed to delete order: ${error.message}`);
+    }
+
+    // Delete multiple orders (only draft/cancelled)
+    async deleteOrders(orderIds: number[]): Promise<number> {
+        const { data, error } = await this.client
+            .from('orders_queue')
+            .delete()
+            .in('id', orderIds)
+            .in('status', ['draft', 'cancelled'])
+            .select('id');
+
+        if (error) throw new Error(`Failed to delete orders: ${error.message}`);
+        return data?.length || 0;
+    }
+
+    // Delete a batch and all its orders (hard delete)
+    async deleteBatch(batchId: string): Promise<{ deletedOrders: number }> {
+        // Delete child orders first, then parent batch
+        const { data, error: ordersError } = await this.client
+            .from('orders_queue')
+            .delete()
+            .eq('batch_id', batchId)
+            .select('id');
+
+        if (ordersError) throw new Error(`Failed to delete orders: ${ordersError.message}`);
+
+        const { error: batchError } = await this.client
+            .from('order_batches')
+            .delete()
+            .eq('id', batchId);
+
+        if (batchError) throw new Error(`Failed to delete batch: ${batchError.message}`);
+
+        return { deletedOrders: data?.length || 0 };
+    }
+
+    // ==================== Audit Log Methods ====================
+
+    async logAudit(params: {
+        userEmail: string;
+        action: string;
+        entityType?: string;
+        entityId?: string;
+        details?: any;
+    }): Promise<void> {
+        const { error } = await this.client
+            .from('audit_logs')
+            .insert({
+                user_email: params.userEmail,
+                action: params.action,
+                entity_type: params.entityType || null,
+                entity_id: params.entityId || null,
+                details: params.details || null,
+            });
+
+        if (error) {
+            console.warn('Failed to log audit:', error.message);
+        }
+    }
+
+    async getAuditLogs(filters: {
+        userEmail?: string;
+        action?: string;
+        entityType?: string;
+        startDate?: Date;
+        endDate?: Date;
+        page?: number;
+        pageSize?: number;
+    } = {}): Promise<{ data: any[]; count: number }> {
+        const page = filters.page || 1;
+        const pageSize = filters.pageSize || 20;
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+
+        let query = this.client
+            .from('audit_logs')
+            .select('*', { count: 'exact' })
+            .order('created_at', { ascending: false });
+
+        if (filters.userEmail) query = query.eq('user_email', filters.userEmail);
+        if (filters.action) query = query.eq('action', filters.action);
+        if (filters.entityType) query = query.eq('entity_type', filters.entityType);
+        if (filters.startDate) query = query.gte('created_at', filters.startDate.toISOString());
+        if (filters.endDate) query = query.lte('created_at', filters.endDate.toISOString());
+
+        query = query.range(from, to);
+
+        const { data, error, count } = await query;
+
+        if (error) {
+            console.warn('Failed to get audit logs:', error.message);
+            return { data: [], count: 0 };
+        }
+
+        return { data: data || [], count: count || 0 };
     }
 
     // Get products from batch
@@ -290,6 +567,15 @@ export class SupabaseService {
             .eq('id', batchId);
 
         if (error) throw new Error(`Failed to update batch products: ${error.message}`);
+    }
+
+    async updateBatchTotalOrders(batchId: string, totalOrders: number): Promise<void> {
+        const { error } = await this.client
+            .from('order_batches')
+            .update({ total_orders: totalOrders })
+            .eq('id', batchId);
+
+        if (error) throw new Error(`Failed to update batch total_orders: ${error.message}`);
     }
 
     // Get used product quantities
@@ -578,6 +864,201 @@ export class SupabaseService {
         };
     }
 
+    // ==================== Customer List Methods ====================
+
+    /** Get or create the single default customer list */
+    async getOrCreateDefaultCustomerList(createdBy?: string): Promise<CustomerList> {
+        // Try to get existing list
+        const { data, error } = await this.client
+            .from('customer_lists')
+            .select('*')
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .single();
+
+        if (data) return data as CustomerList;
+
+        // No list exists, create one
+        if (error && error.code === 'PGRST116') {
+            const { data: newList, error: createError } = await this.client
+                .from('customer_lists')
+                .insert({ name: 'Danh sách khách hàng', created_by: createdBy || null })
+                .select()
+                .single();
+
+            // If insert failed (e.g. race condition from another tab), try fetching again
+            if (createError) {
+                const { data: retryData } = await this.client
+                    .from('customer_lists')
+                    .select('*')
+                    .order('created_at', { ascending: true })
+                    .limit(1)
+                    .single();
+                if (retryData) return retryData as CustomerList;
+                throw new Error(`Failed to create customer list: ${createError.message}`);
+            }
+            return newList as CustomerList;
+        }
+
+        throw new Error(`Failed to get customer list: ${error?.message}`);
+    }
+
+    /** Get all customer items from the default list.
+     *  When totalCount is provided, fires all page queries in parallel for speed. */
+    async getCustomerItems(listId: string, totalCount?: number): Promise<CustomerListItem[]> {
+        const pageSize = 1000;
+
+        // Parallel loading when we know the total count upfront
+        if (totalCount && totalCount > pageSize) {
+            const totalPages = Math.ceil(totalCount / pageSize);
+            const promises = Array.from({ length: totalPages }, (_, i) => {
+                const offset = i * pageSize;
+                return this.client
+                    .from('customer_list_items')
+                    .select('*')
+                    .eq('list_id', listId)
+                    .order('id', { ascending: true })
+                    .range(offset, offset + pageSize - 1);
+            });
+
+            const results = await Promise.all(promises);
+            const allItems: CustomerListItem[] = [];
+            for (const result of results) {
+                if (result.error) throw new Error(`Failed to get customers: ${result.error.message}`);
+                if (result.data) allItems.push(...(result.data as CustomerListItem[]));
+            }
+            return allItems;
+        }
+
+        // Sequential fallback for small datasets or unknown count
+        const allItems: CustomerListItem[] = [];
+        let offset = 0;
+        let hasMore = true;
+
+        while (hasMore) {
+            const { data, error } = await this.client
+                .from('customer_list_items')
+                .select('*')
+                .eq('list_id', listId)
+                .order('id', { ascending: true })
+                .range(offset, offset + pageSize - 1);
+
+            if (error) throw new Error(`Failed to get customers: ${error.message}`);
+            if (!data || data.length === 0) { hasMore = false; break; }
+
+            allItems.push(...(data as CustomerListItem[]));
+            hasMore = data.length >= pageSize;
+            offset += pageSize;
+        }
+
+        return allItems;
+    }
+
+    /** Get a page of customer items with optional search. Returns items + total count. */
+    async getCustomerItemsPage(
+        listId: string,
+        page: number,
+        pageSize: number,
+        search?: string,
+    ): Promise<{ items: CustomerListItem[]; totalCount: number }> {
+        let query = this.client
+            .from('customer_list_items')
+            .select('*', { count: 'exact' })
+            .eq('list_id', listId);
+
+        if (search) {
+            query = query.or(`name.ilike.%${search}%,phone.ilike.%${search}%,customer_ext_id.ilike.%${search}%`);
+        }
+
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error, count } = await query
+            .order('id', { ascending: true })
+            .range(from, to);
+
+        if (error) throw new Error(`Failed to get customers: ${error.message}`);
+
+        return {
+            items: (data || []) as CustomerListItem[],
+            totalCount: count || 0,
+        };
+    }
+
+    /** Bulk upsert customer items (for Excel import). Updates existing by customer_ext_id. Batches to avoid timeout. */
+    async upsertCustomerItems(
+        listId: string,
+        items: CustomerListItemInsert[],
+        onProgress?: (processed: number, total: number) => void,
+    ): Promise<{ inserted: number; updated: number }> {
+        const records = items.map((item) => ({
+            list_id: listId,
+            customer_ext_id: item.customer_ext_id,
+            name: item.name,
+            phone: item.phone,
+        }));
+
+        // Batch upsert in chunks of 100 to stay within Supabase statement timeout
+        const batchSize = 100;
+        let totalInserted = 0;
+
+        for (let i = 0; i < records.length; i += batchSize) {
+            const batch = records.slice(i, i + batchSize);
+            const { error, count } = await this.client
+                .from('customer_list_items')
+                .upsert(batch, { onConflict: 'list_id,customer_ext_id', count: 'exact' });
+
+            if (error) throw new Error(`Lỗi import batch ${Math.floor(i / batchSize) + 1}: ${error.message}`);
+            totalInserted += count || batch.length;
+            onProgress?.(Math.min(i + batchSize, records.length), records.length);
+        }
+
+        return { inserted: totalInserted, updated: 0 };
+    }
+
+    /** Add a single customer item */
+    async addCustomerItem(listId: string, item: CustomerListItemInsert): Promise<CustomerListItem> {
+        const { data, error } = await this.client
+            .from('customer_list_items')
+            .insert({ list_id: listId, ...item })
+            .select()
+            .single();
+
+        if (error) throw new Error(`Failed to add customer: ${error.message}`);
+        return data as CustomerListItem;
+    }
+
+    /** Update a single customer item */
+    async updateCustomerItem(itemId: number, updates: Partial<CustomerListItemInsert>): Promise<void> {
+        const { error } = await this.client
+            .from('customer_list_items')
+            .update({ ...updates, updated_at: new Date().toISOString() })
+            .eq('id', itemId);
+
+        if (error) throw new Error(`Failed to update customer: ${error.message}`);
+    }
+
+    /** Delete a single customer item */
+    async deleteCustomerItem(itemId: number): Promise<void> {
+        const { error } = await this.client
+            .from('customer_list_items')
+            .delete()
+            .eq('id', itemId);
+
+        if (error) throw new Error(`Failed to delete customer: ${error.message}`);
+    }
+
+    /** Delete multiple customer items */
+    async deleteCustomerItems(itemIds: number[]): Promise<number> {
+        const { data, error } = await this.client
+            .from('customer_list_items')
+            .delete()
+            .in('id', itemIds)
+            .select('id');
+
+        if (error) throw new Error(`Failed to delete customers: ${error.message}`);
+        return data?.length || 0;
+    }
+
     // ==================== Settings Methods ====================
 
     async getSettings(): Promise<Record<string, any>> {
@@ -632,4 +1113,64 @@ export class SupabaseService {
 
         return data || [];
     }
+
+    async getRecentBatchesWithStatus(params: {
+        limit?: number;
+        offset?: number;
+        startDate?: string;
+        endDate?: string;
+    }): Promise<{
+        batches: Array<{
+            id: string;
+            start_date: string;
+            end_date: string;
+            total_orders: number;
+            status: string;
+            created_at: string;
+            computed_status: string;
+            completed_count: number;
+            failed_count: number;
+            pending_count: number;
+        }>;
+        totalCount: number;
+    }> {
+        const { limit = 20, offset = 0, startDate, endDate } = params;
+
+        const [batchResult, countResult] = await Promise.all([
+            this.client.rpc('get_recent_batches_with_status', {
+                p_limit: limit,
+                p_offset: offset,
+                p_start_date: startDate || null,
+                p_end_date: endDate || null,
+            }),
+            this.client.rpc('get_batches_count', {
+                p_start_date: startDate || null,
+                p_end_date: endDate || null,
+            }),
+        ]);
+
+        if (batchResult.error) {
+            console.error('Failed to fetch batches with status:', batchResult.error.message);
+            return { batches: [], totalCount: 0 };
+        }
+
+        return {
+            batches: batchResult.data || [],
+            totalCount: countResult.error ? 0 : (countResult.data || 0),
+        };
+    }
+}
+
+// Singleton instance - avoids creating multiple Supabase clients
+let _instance: SupabaseService | null = null;
+
+export function getSupabaseService(): SupabaseService | null {
+    if (_instance) return _instance;
+
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    if (!url || !key) return null;
+
+    _instance = new SupabaseService({ url, key });
+    return _instance;
 }

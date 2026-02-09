@@ -12,6 +12,8 @@ export type PermissionLevel = 'view' | 'create' | 'manage';
 
 const SSO_TOKEN_KEY = 'sso_token';
 const SSO_USER_KEY = 'sso_user';
+const SSO_SESSION_TS_KEY = 'sso_session_ts';
+const SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 // Permission codes for this app (must match portal's permission codes)
 const PERMISSION_PREFIX = 'order_excel.orders';
@@ -111,6 +113,7 @@ export function hasRequiredLevel(
 export function saveSession(user: SSOUser, token: string): void {
   localStorage.setItem(SSO_USER_KEY, JSON.stringify(user));
   localStorage.setItem(SSO_TOKEN_KEY, token);
+  localStorage.setItem(SSO_SESSION_TS_KEY, String(Date.now()));
 }
 
 /**
@@ -120,6 +123,17 @@ export function loadSession(): SSOUser | null {
   try {
     const userData = localStorage.getItem(SSO_USER_KEY);
     if (!userData) return null;
+
+    // Check session age
+    const sessionTs = localStorage.getItem(SSO_SESSION_TS_KEY);
+    if (sessionTs) {
+      const age = Date.now() - Number(sessionTs);
+      if (age > SESSION_MAX_AGE_MS) {
+        clearSession();
+        return null;
+      }
+    }
+
     return JSON.parse(userData) as SSOUser;
   } catch {
     return null;
@@ -132,4 +146,5 @@ export function loadSession(): SSOUser | null {
 export function clearSession(): void {
   localStorage.removeItem(SSO_USER_KEY);
   localStorage.removeItem(SSO_TOKEN_KEY);
+  localStorage.removeItem(SSO_SESSION_TS_KEY);
 }

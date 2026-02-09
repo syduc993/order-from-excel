@@ -6,11 +6,24 @@ export interface TimeSlotConfig {
   weight: number; // Trọng số (cao điểm = nhiều đơn hơn)
 }
 
+export interface DepotProfile {
+  id: string;       // unique key, e.g. "kho-test"
+  name: string;     // display name, e.g. "Kho test"
+  depotId: number;  // NhanhVN depot ID
+  nhanhAppId: string;
+  nhanhBusinessId: string;
+  nhanhAccessToken: string;
+}
+
 export interface ApiConfig {
+  // Derived from active profile — kept so all existing code still works
   depotId: number;
   nhanhAppId: string;
   nhanhBusinessId: string;
   nhanhAccessToken: string;
+  // Profile system
+  activeDepotId: string;
+  depotProfiles: DepotProfile[];
 }
 
 export interface OrderRulesConfig {
@@ -76,6 +89,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     nhanhAppId: '',
     nhanhBusinessId: '',
     nhanhAccessToken: '',
+    activeDepotId: 'kho-chinh',
+    depotProfiles: [
+      { id: 'kho-chinh', name: 'Kho chính', depotId: 215639, nhanhAppId: '', nhanhBusinessId: '', nhanhAccessToken: '' },
+    ],
   },
   orderRules: {
     minTotalAmount: 300000,
@@ -102,3 +119,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     templateSheetName: 'template',
   },
 };
+
+/** Get the active depot profile (or first profile as fallback) */
+export function getActiveDepot(apiConfig: ApiConfig): DepotProfile {
+  const found = apiConfig.depotProfiles.find(p => p.id === apiConfig.activeDepotId);
+  return found || apiConfig.depotProfiles[0] || {
+    id: 'default', name: 'Mặc định', depotId: apiConfig.depotId,
+    nhanhAppId: apiConfig.nhanhAppId, nhanhBusinessId: apiConfig.nhanhBusinessId, nhanhAccessToken: apiConfig.nhanhAccessToken,
+  };
+}

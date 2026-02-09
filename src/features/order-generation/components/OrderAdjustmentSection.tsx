@@ -79,7 +79,7 @@ export const OrderAdjustmentSection = ({
     }, []);
 
     const formatDate = (dateStr: string) => {
-        return new Date(dateStr).toLocaleDateString('vi-VN');
+        return new Date(dateStr).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
     };
 
     const handleConfirmAdjust = () => {

@@ -26,6 +26,7 @@ export const calculateTotalOrders = (
 
 export const getStatusColor = (status: string) => {
     switch (status) {
+        case 'draft': return 'text-purple-600 bg-purple-50';
         case 'pending': return 'text-yellow-600 bg-yellow-50';
         case 'processing': return 'text-blue-600 bg-blue-50';
         case 'completed': return 'text-green-600 bg-green-50';
@@ -37,6 +38,7 @@ export const getStatusColor = (status: string) => {
 
 export const getStatusText = (status: string) => {
     switch (status) {
+        case 'draft': return 'Nháp';
         case 'pending': return 'Đang chờ';
         case 'processing': return 'Đang xử lý';
         case 'completed': return 'Thành công';
@@ -45,3 +47,5 @@ export const getStatusText = (status: string) => {
         default: return status;
     }
 };
+
+export const ALL_STATUSES = ['draft', 'pending', 'completed', 'failed', 'cancelled'] as const;

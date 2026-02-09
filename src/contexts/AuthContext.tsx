@@ -33,6 +33,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const initializeAuth = useCallback(async () => {
     setIsLoading(true);
     try {
+      // DEV BYPASS: Skip SSO when VITE_DEV_BYPASS_AUTH=true in dev mode
+      if (import.meta.env.DEV && import.meta.env.VITE_DEV_BYPASS_AUTH === 'true') {
+        const devUser: SSOUser = {
+          userId: 'dev-local',
+          email: import.meta.env.VITE_DEV_USER_EMAIL || 'dev@localhost',
+          role: 'admin',
+          permissions: ['system.full_access'],
+        };
+        setUser(devUser);
+        setPermissionLevel('manage');
+        setIsLoading(false);
+        return;
+      }
+
       // Step 1: Check for SSO token in URL (new login from portal)
       const token = extractTokenFromURL();
       if (token) {
