@@ -123,16 +123,18 @@ export function distributeOrdersToDays(
     }
     distributedSoFar += ordersForThisDay;
     
-    // Tạo burst clusters: khách đến theo đợt, không đều mỗi phút
-    // Mỗi đợt 2-6 đơn sát nhau (0-3 phút), giữa các đợt có khoảng trống tự nhiên
-    const avgBurstSize = 2 + Math.floor(Math.random() * 4); // 2-5 đơn/đợt
-    const numBursts = Math.max(1, Math.ceil(ordersForThisDay / avgBurstSize));
-
-    // Phân bổ burst anchors đều qua các khung giờ theo weight
-    // Mỗi khung giờ nhận tối thiểu 1 burst, peak hours nhận nhiều hơn
+    // BƯỚC 1: Phân bổ SỐ ĐƠN cho từng khung giờ theo weight
+    // (Đảm bảo mỗi khung giờ nhận đúng tỷ lệ đơn, không bị dồn vào giờ sớm)
     const totalSlotWeight = TIME_SLOTS.reduce((sum, s) => sum + s.weight * (s.end - s.start), 0);
-    const burstAnchors: number[] = [];
-    let burstsAllocated = 0;
+
+    interface SlotAllocation {
+      slotStartMin: number;
+      slotEndMin: number;
+      orderCount: number;
+      anchors: number[];
+    }
+    const slotAllocations: SlotAllocation[] = [];
+    let ordersAllocatedToSlots = 0;
 
     for (let s = 0; s < TIME_SLOTS.length; s++) {
       const slot = TIME_SLOTS[s];
@@ -141,71 +143,64 @@ export function distributeOrdersToDays(
       const slotDuration = slotEndMin - slotStartMin;
       const slotWeight = slot.weight * (slot.end - slot.start);
 
-      // Số burst cho khung giờ này (tối thiểu 1, tỷ lệ theo weight)
-      let burstsForSlot: number;
+      // Số đơn cho khung giờ này (tỷ lệ theo weight)
+      let orderCountForSlot: number;
       if (s === TIME_SLOTS.length - 1) {
-        burstsForSlot = Math.max(1, numBursts - burstsAllocated);
+        orderCountForSlot = ordersForThisDay - ordersAllocatedToSlots;
       } else {
-        burstsForSlot = Math.max(1, Math.round(numBursts * slotWeight / totalSlotWeight));
+        orderCountForSlot = Math.round(ordersForThisDay * slotWeight / totalSlotWeight);
       }
-      burstsAllocated += burstsForSlot;
+      orderCountForSlot = Math.max(0, Math.min(orderCountForSlot, ordersForThisDay - ordersAllocatedToSlots));
+      ordersAllocatedToSlots += orderCountForSlot;
 
-      // Rải đều trong khung giờ + jitter ±5 phút
-      for (let b = 0; b < burstsForSlot; b++) {
-        const basePos = slotStartMin + (slotDuration / (burstsForSlot + 1)) * (b + 1);
-        const jitterRange = Math.min(5, Math.floor(slotDuration / (burstsForSlot + 1) / 2));
+      // BƯỚC 2: Tạo burst anchors trong khung giờ này
+      // Mỗi đợt 2-5 đơn sát nhau, burst clustering tạo cảm giác tự nhiên
+      const burstSize = 2 + Math.floor(Math.random() * 4); // 2-5 đơn/đợt
+      const numBurstsForSlot = Math.max(1, Math.ceil(orderCountForSlot / burstSize));
+
+      const anchors: number[] = [];
+      for (let b = 0; b < numBurstsForSlot; b++) {
+        const basePos = slotStartMin + (slotDuration / (numBurstsForSlot + 1)) * (b + 1);
+        const jitterRange = Math.min(5, Math.floor(slotDuration / (numBurstsForSlot + 1) / 2));
         const jitter = Math.floor(Math.random() * (jitterRange * 2 + 1)) - jitterRange;
-        burstAnchors.push(Math.max(slotStartMin, Math.min(slotEndMin - 1, Math.round(basePos + jitter))));
+        anchors.push(Math.max(slotStartMin, Math.min(slotEndMin - 1, Math.round(basePos + jitter))));
       }
+
+      slotAllocations.push({ slotStartMin, slotEndMin, orderCount: orderCountForSlot, anchors });
     }
 
-    // Đảm bảo không có khoảng trống quá maxGapMinutes phút giữa các đợt
-    burstAnchors.sort((a, b) => a - b);
-    const maxGapMinutes = 10;
-    const filledAnchors: number[] = [burstAnchors[0]];
-    for (let a = 1; a < burstAnchors.length; a++) {
-      while (burstAnchors[a] - filledAnchors[filledAnchors.length - 1] > maxGapMinutes) {
-        const lastAnchor = filledAnchors[filledAnchors.length - 1];
-        filledAnchors.push(lastAnchor + Math.floor(maxGapMinutes * (0.5 + Math.random() * 0.5)));
-      }
-      filledAnchors.push(burstAnchors[a]);
-    }
+    // BƯỚC 3: Phân bổ đơn vào burst anchors trong từng khung giờ
+    for (const allocation of slotAllocations) {
+      if (allocation.orderCount <= 0) continue;
 
-    // Phân bổ đơn vào từng đợt khách
-    let currentBurst = 0;
-    let ordersInBurst = 0;
-    let wrapCount = 0; // Đếm số lần wrap lại (để offset anchor tránh trùng giờ)
-    let currentBurstCapacity = 2 + Math.floor(Math.random() * 5); // 2-6 đơn/đợt (vary)
+      let anchorIdx = 0;
+      let ordersInBurst = 0;
+      let burstCapacity = 2 + Math.floor(Math.random() * 5); // 2-6 đơn/đợt
 
-    for (let i = 0; i < ordersForThisDay && orderIndex < orders.length; i++) {
-      const order = orders[orderIndex];
-      const anchorMinute = filledAnchors[currentBurst];
-      // Jitter 0-3 phút + offset khi wrap (tránh trùng giờ chính xác)
-      const jitter = Math.floor(Math.random() * 4) + wrapCount * 4;
-      const totalMinutes = Math.min(anchorMinute + jitter, 22 * 60 + 45);
+      for (let i = 0; i < allocation.orderCount && orderIndex < orders.length; i++) {
+        const order = orders[orderIndex];
+        const anchorMinute = allocation.anchors[anchorIdx];
+        // Jitter 0-3 phút cho mỗi đơn trong burst
+        const jitter = Math.floor(Math.random() * 4);
+        const totalMinutes = Math.min(anchorMinute + jitter, allocation.slotEndMin - 1);
 
-      const scheduledTime = new Date(dayPlan.date);
-      scheduledTime.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
+        const scheduledTime = new Date(dayPlan.date);
+        scheduledTime.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
 
-      distributedOrders.push({
-        ...order,
-        scheduledTime
-      });
+        distributedOrders.push({
+          ...order,
+          scheduledTime
+        });
 
-      orderIndex++;
-      ordersInBurst++;
+        orderIndex++;
+        ordersInBurst++;
 
-      // Chuyển sang đợt tiếp theo khi đủ capacity
-      if (ordersInBurst >= currentBurstCapacity) {
-        if (currentBurst < filledAnchors.length - 1) {
-          currentBurst++;
-        } else {
-          // Wrap lại từ đầu, offset thêm để không trùng giờ
-          currentBurst = 0;
-          wrapCount++;
+        // Chuyển sang đợt tiếp theo khi đủ capacity
+        if (ordersInBurst >= burstCapacity && anchorIdx < allocation.anchors.length - 1) {
+          anchorIdx++;
+          ordersInBurst = 0;
+          burstCapacity = 2 + Math.floor(Math.random() * 5);
         }
-        ordersInBurst = 0;
-        currentBurstCapacity = 2 + Math.floor(Math.random() * 5);
       }
     }
   }
