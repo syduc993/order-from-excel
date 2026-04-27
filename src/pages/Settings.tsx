@@ -349,6 +349,35 @@ const Settings = () => {
                   <p className="text-xs text-muted-foreground">Sau N lần liên tiếp thất bại, chuyển "chế độ linh hoạt": nới min/3, max x1.5, +3 SP, +2 SL.</p>
                 </div>
               </div>
+
+              <div className="pt-2 border-t">
+                <h4 className="text-sm font-medium mb-3 text-muted-foreground">Tham số nâng cao</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Độ lệch giá trị đơn (skew)</Label>
+                    <Input type="number" step="0.1" min="1" value={orderRules.targetAmountSkew} onChange={(e) => setOrderRules({ ...orderRules, targetAmountSkew: Number(e.target.value) })} placeholder="2.5" />
+                    <p className="text-xs text-muted-foreground">1 = uniform (đơn rải đều min↔max). 2.5 = log-normal-like (đa số đơn nhỏ, đuôi dài lên cao — gần thực tế nhất). 3+ = lệch trái mạnh.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Tỷ lệ ước trung bình đơn</Label>
+                    <Input type="number" step="0.01" min="0" max="1" value={orderRules.avgOrderValueRatio} onChange={(e) => setOrderRules({ ...orderRules, avgOrderValueRatio: Number(e.target.value) })} placeholder="0.286" />
+                    <p className="text-xs text-muted-foreground">Dùng để ƯỚC số đơn cần tạo. avg ≈ min + ratio·(max−min). Lý tưởng = 1/(skew+1) → skew 2.5 ⇒ ratio ≈ 0.286.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 mt-4">
+                  <div className="space-y-2">
+                    <Label>Số SP "thừa" khi rút random (slack)</Label>
+                    <Input type="number" min="0" value={orderRules.productCountSlack} onChange={(e) => setOrderRules({ ...orderRules, productCountSlack: Number(e.target.value) })} placeholder="3" />
+                    <p className="text-xs text-muted-foreground">Cộng vào maxProductsPerOrder khi random — giúp đạt minTotalAmount với pool sản phẩm giá rẻ. 0 = bám đúng max.</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Số vòng lặp tối đa / đơn</Label>
+                    <Input type="number" min="5" value={orderRules.maxGenerationLoops} onChange={(e) => setOrderRules({ ...orderRules, maxGenerationLoops: Number(e.target.value) })} placeholder="20" />
+                    <p className="text-xs text-muted-foreground">Số lần thử thêm sản phẩm vào 1 đơn. Tăng nếu sản phẩm quá rẻ so với min — giảm nếu muốn fail nhanh.</p>
+                  </div>
+                </div>
+              </div>
+
               <Button onClick={() => handleSave('order_rules', orderRules, 'quy tắc tạo đơn')} disabled={isSaving === 'order_rules'} className="mt-2">
                 {isSaving === 'order_rules' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
                 Lưu

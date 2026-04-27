@@ -35,6 +35,14 @@ export interface OrderRulesConfig {
   maxQuantityPerProduct: number;
   sweepMaxValue: number;
   maxConsecutiveFails: number;
+  /** Số sản phẩm "thừa" cộng vào maxProductsPerOrder khi rút random — giúp đạt minTotalAmount với pool giá rẻ. */
+  productCountSlack: number;
+  /** Số vòng lặp tối đa khi rút sản phẩm cho 1 đơn. */
+  maxGenerationLoops: number;
+  /** Tỷ lệ vị trí trung bình đơn giữa min và max (dùng để ƯỚC số đơn). Lý tưởng ≈ 1/(targetAmountSkew+1). */
+  avgOrderValueRatio: number;
+  /** Độ lệch của phân phối targetAmount: 1 = uniform, 2.5 = log-normal-like (đa số đơn nhỏ, đuôi dài lên cao). */
+  targetAmountSkew: number;
 }
 
 export interface TimeDistributionConfig {
@@ -103,6 +111,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     maxQuantityPerProduct: 3,
     sweepMaxValue: 200000,
     maxConsecutiveFails: 100,
+    productCountSlack: 3,
+    maxGenerationLoops: 20,
+    avgOrderValueRatio: 0.286, // ≈ 1/(2.5+1), khớp với targetAmountSkew=2.5
+    targetAmountSkew: 2.5,
   },
   timeDistribution: {
     timeSlots: DEFAULT_TIME_SLOTS,

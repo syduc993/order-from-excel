@@ -274,10 +274,11 @@ const Help = () => {
                                     <AccordionContent className="space-y-2 text-sm">
                                         <p>Hệ thống tính số đơn cần tạo dựa trên tổng giá trị sản phẩm và giá trị trung bình mỗi đơn:</p>
                                         <div className="p-3 bg-muted rounded-lg font-mono text-xs">
-                                            <p>avgOrderValue = (minOrderValue + maxOrderValue) / 2</p>
+                                            <p>avgOrderValue = min + ratio × (max − min)</p>
                                             <p>totalOrders = totalValue / avgOrderValue</p>
                                         </div>
-                                        <p>Ví dụ: Tổng giá trị 100 triệu, min 500K, max 1.5 triệu → avgOrderValue = 1 triệu → 100 đơn.</p>
+                                        <p>Tham số <code>ratio</code> (mặc định 0.286) bù cho thuật toán sinh đơn theo phân phối lệch trái (skew=2.5, log-normal-like): đa số đơn giá trị nhỏ, đuôi dài lên cao, nên trung bình thực tế nằm gần min. Quan hệ lý tưởng: <code>ratio = 1/(skew+1)</code>.</p>
+                                        <p>Ví dụ: Tổng giá trị 100 triệu, min 500K, max 1.5 triệu, ratio 0.286 → avgOrderValue ≈ 786K → ~127 đơn.</p>
                                     </AccordionContent>
                                 </AccordionItem>
 

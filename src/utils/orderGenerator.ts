@@ -42,18 +42,23 @@ export function generateRandomOrder(
   ); // 30% giá trung
   const highPriceProducts = sortedProducts.slice(Math.floor(sortedProducts.length * 0.9)); // 10% giá cao
 
-  // 5. Random số lượng sản phẩm trong đơn (1-5)
-  // Tăng giới hạn lên một chút để dễ đạt 300k nếu sản phẩm giá rẻ
-  const numProducts = Math.floor(
-    Math.random() * (config.maxProductsPerOrder + 3 - config.minProductsPerOrder + 1)
-  ) + config.minProductsPerOrder;
+  // 5. Random số lượng sản phẩm trong đơn — cộng productCountSlack để dễ đạt minTotalAmount với pool giá rẻ
+  const slack = Math.max(0, config.productCountSlack);
+  const productRange = config.maxProductsPerOrder + slack - config.minProductsPerOrder + 1;
+  const numProducts = Math.floor(Math.random() * Math.max(1, productRange)) + config.minProductsPerOrder;
 
   // 6. Chọn sản phẩm
   const selectedProductsMap = new Map<number, { product: Product; quantity: number }>();
   let totalAmount = 0;
+
+  // Skewed target: u^skew biased về min (đa số đơn giá trị nhỏ, đuôi dài lên cao).
+  // skew=1 → uniform; skew=2.5 → log-normal-like; skew=3+ → rất lệch trái.
+  const skew = Math.max(1, config.targetAmountSkew);
+  const u = Math.random();
+  const skewed = Math.pow(u, skew);
   const targetAmount = Math.floor(
-    Math.random() * (config.maxTotalAmount - config.minTotalAmount + 1)
-  ) + config.minTotalAmount;
+    config.minTotalAmount + skewed * (config.maxTotalAmount - config.minTotalAmount)
+  );
 
   // Track temporary usage in this order
   const tempUsedQuantities = new Map<number, number>();
@@ -61,7 +66,7 @@ export function generateRandomOrder(
   // Loop condition: Continue if we haven't reached minTotalAmount OR (we haven't reached targetAmount AND haven't reached numProducts)
   // This ensures we prioritize reaching minTotalAmount
   let loopCount = 0;
-  const maxLoop = 20; // Prevent infinite loop
+  const maxLoop = Math.max(5, config.maxGenerationLoops);
 
   while (
     (totalAmount < config.minTotalAmount || (totalAmount < targetAmount && selectedProductsMap.size < numProducts)) &&
@@ -115,8 +120,15 @@ export function generateRandomOrder(
     const quantity = Math.floor(Math.random() * (maxQ - minQ + 1)) + minQ;
     const productAmount = randomProduct.price * quantity;
 
-    // Kiểm tra: Chỉ thêm nếu không vượt quá maxTotalAmount (trừ khi chưa đạt minTotalAmount thì cứ thêm)
-    if (totalAmount + productAmount <= config.maxTotalAmount || totalAmount < config.minTotalAmount) {
+    // Soft cap chống outlier: khi đã vượt minTotalAmount, không cho overshoot maxTotalAmount.
+    // Khi chưa đạt minTotalAmount, ưu tiên thử sản phẩm khác (cheaper) — chỉ chấp nhận overshoot
+    // ở 2 vòng cuối để bảo đảm vẫn tạo được đơn.
+    const wouldOvershoot = totalAmount + productAmount > config.maxTotalAmount;
+    const belowMin = totalAmount < config.minTotalAmount;
+    const desperate = loopCount >= maxLoop - 2;
+    const accept = !wouldOvershoot || (belowMin && desperate);
+
+    if (accept) {
       if (selectedProductsMap.has(randomProduct.id)) {
         const existing = selectedProductsMap.get(randomProduct.id)!;
         existing.quantity += quantity;

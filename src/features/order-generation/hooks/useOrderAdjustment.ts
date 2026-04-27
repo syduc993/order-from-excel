@@ -245,7 +245,8 @@ export const useOrderAdjustment = ({
             const totalOrders = calculateTotalOrders(
                 finalInventory,
                 settings.orderRules.minTotalAmount,
-                settings.orderRules.maxTotalAmount
+                settings.orderRules.maxTotalAmount,
+                settings.orderRules.avgOrderValueRatio
             );
 
             if (totalOrders <= 0) {
@@ -257,7 +258,8 @@ export const useOrderAdjustment = ({
             const ordersPerDay = calculateOrdersPerDay(
                 totalOrders,
                 remainingStartDate,
-                remainingEndDate
+                remainingEndDate,
+                settings.timeDistribution
             );
 
             console.log('Phân bổ đơn hàng điều chỉnh theo ngày:', ordersPerDay.map(d => ({
@@ -355,8 +357,8 @@ export const useOrderAdjustment = ({
                             const { order: apiRequest, totalAmount, usedProducts } = flexibleResult;
                             if (usedProducts) {
                                 usedProducts.forEach((qty, productId) => {
-                                    const productIndex = currentInventory.findIndex(p => p.id === productId);
-                                    if (productIndex !== -1) currentInventory[productIndex].quantity -= qty;
+                                    const productIndex = workingInventory.findIndex(p => p.id === productId);
+                                    if (productIndex !== -1) workingInventory[productIndex].quantity -= qty;
                                 });
                             }
                             const customerId = typeof randomCustomer.id === 'string' ? parseInt(randomCustomer.id, 10) : randomCustomer.id;
@@ -457,7 +459,7 @@ export const useOrderAdjustment = ({
                 ordersPerDay,
                 remainingStartDate,
                 remainingEndDate,
-                false
+                settings.timeDistribution
             );
             orders.push(...distributedMainOrders);
 
@@ -467,7 +469,7 @@ export const useOrderAdjustment = ({
                     ordersPerDay,
                     remainingStartDate,
                     remainingEndDate,
-                    true
+                    settings.timeDistribution
                 );
                 orders.push(...distributedSweepOrders);
             }

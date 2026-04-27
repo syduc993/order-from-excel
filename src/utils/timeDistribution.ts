@@ -1,23 +1,17 @@
 // Utility để phân bổ thời gian cho đơn hàng theo giờ trong ngày
-import { DEFAULT_SETTINGS, type TimeDistributionConfig } from '@/types/settings';
+import { DEFAULT_SETTINGS, type TimeDistributionConfig, type TimeSlotConfig } from '@/types/settings';
 
-interface TimeSlot {
-  start: number; // Giờ bắt đầu (0-23)
-  end: number; // Giờ kết thúc (0-23)
-  weight: number; // Trọng số (cao điểm = nhiều đơn hơn)
-}
-
-// Default TIME_SLOTS (fallback khi không truyền config)
-export const TIME_SLOTS: TimeSlot[] = DEFAULT_SETTINGS.timeDistribution.timeSlots;
+// Re-export default time slots cho code cũ vẫn import được
+export const TIME_SLOTS: TimeSlotConfig[] = DEFAULT_SETTINGS.timeDistribution.timeSlots;
 
 // Kiểm tra xem có phải cuối tuần không (Thứ 7 = 6, Chủ Nhật = 0)
 function isWeekend(date: Date): boolean {
   const dayOfWeek = date.getDay();
-  return dayOfWeek === 0 || dayOfWeek === 6; // Chủ Nhật hoặc Thứ 7
+  return dayOfWeek === 0 || dayOfWeek === 6;
 }
 
 // Tính weight theo ngày (cuối tuần nhiều bill hơn)
-export function getDayWeight(date: Date, weekendBoost: number = DEFAULT_SETTINGS.timeDistribution.weekendBoost): number {
+export function getDayWeight(date: Date, weekendBoost: number): number {
   return isWeekend(date) ? weekendBoost : 1.0;
 }
 
@@ -25,7 +19,8 @@ export function getDayWeight(date: Date, weekendBoost: number = DEFAULT_SETTINGS
 export function calculateOrdersPerDay(
   totalOrders: number,
   startDate: Date,
-  endDate: Date
+  endDate: Date,
+  config: TimeDistributionConfig = DEFAULT_SETTINGS.timeDistribution
 ): Array<{ date: Date; orderCount: number }> {
   const normalizedStart = new Date(startDate);
   normalizedStart.setHours(0, 0, 0, 0);
@@ -35,51 +30,44 @@ export function calculateOrdersPerDay(
   const days: Date[] = [];
   const dayWeights: number[] = [];
 
-  // Tính weight cho mỗi ngày
   for (let d = new Date(normalizedStart); d <= normalizedEnd; d.setDate(d.getDate() + 1)) {
     const day = new Date(d);
     day.setHours(0, 0, 0, 0);
     days.push(day);
-    dayWeights.push(getDayWeight(day));
+    dayWeights.push(getDayWeight(day, config.weekendBoost));
   }
 
-  // Tính tổng weight
   const totalWeight = dayWeights.reduce((sum, weight) => sum + weight, 0);
 
-  // Phân bổ số lượng đơn hàng cho mỗi ngày theo tỷ lệ weight
   const ordersPerDay: Array<{ date: Date; orderCount: number }> = [];
   let remainingOrders = totalOrders;
 
   for (let i = 0; i < days.length; i++) {
     const weight = dayWeights[i];
     const proportion = weight / totalWeight;
-    
-    // Tính số lượng đơn cho ngày này (làm tròn)
+
     let orderCount = Math.floor(totalOrders * proportion);
-    
-    // Đảm bảo mỗi ngày có ít nhất 1 đơn (nếu còn đơn)
+
     if (orderCount === 0 && remainingOrders > 0 && i < days.length - 1) {
       orderCount = 1;
     }
-    
-    // Đảm bảo không vượt quá số đơn còn lại
+
     orderCount = Math.min(orderCount, remainingOrders);
-    
+
     ordersPerDay.push({
       date: days[i],
       orderCount
     });
-    
+
     remainingOrders -= orderCount;
   }
 
   // Phân bổ số đơn còn lại (do làm tròn) vào các ngày có weight cao nhất
   if (remainingOrders > 0) {
-    // Sắp xếp theo weight giảm dần
     const sortedIndices = dayWeights
       .map((weight, index) => ({ weight, index }))
       .sort((a, b) => b.weight - a.weight);
-    
+
     for (let i = 0; i < remainingOrders && i < sortedIndices.length; i++) {
       const dayIndex = sortedIndices[i].index;
       ordersPerDay[dayIndex].orderCount++;
@@ -89,16 +77,17 @@ export function calculateOrdersPerDay(
   return ordersPerDay;
 }
 
-// Phân bổ các đơn hàng đã tạo cho các ngày theo weight
+// Phân bổ các đơn hàng đã tạo cho các ngày theo weight + late order window
 export function distributeOrdersToDays(
   orders: Array<{ orderIndex: number; customerId: number; customerName: string; customerPhone: string; orderData: any; totalAmount: number; scheduledTime?: Date }>,
   ordersPerDay: Array<{ date: Date; orderCount: number }>,
   startDate: Date,
   endDate: Date,
-  isSweepOrder: boolean = false
+  config: TimeDistributionConfig = DEFAULT_SETTINGS.timeDistribution
 ): Array<{ orderIndex: number; customerId: number; customerName: string; customerPhone: string; orderData: any; totalAmount: number; scheduledTime: Date }> {
-  // Phân bổ đơn hàng cho từng ngày theo weight + burst clustering
-  // (logic chung cho cả đơn chính và đơn vét)
+  void startDate; void endDate; // giữ chữ ký cũ để callers không phải đổi nhiều
+
+  const timeSlots = config.timeSlots;
   const plannedTotal = ordersPerDay.reduce((sum, d) => sum + d.orderCount, 0);
   const actualTotal = orders.length;
 
@@ -106,26 +95,42 @@ export function distributeOrdersToDays(
   let orderIndex = 0;
   let distributedSoFar = 0;
 
+  const lateStartMin = Math.round(config.lateOrderTimeStart * 60);
+  const lateEndMin = Math.round(config.lateOrderTimeEnd * 60);
+  const lateWindowValid = lateEndMin > lateStartMin && config.lateOrderPercent > 0;
+
   for (let dayIdx = 0; dayIdx < ordersPerDay.length; dayIdx++) {
     const dayPlan = ordersPerDay[dayIdx];
 
-    // Số đơn cho ngày này theo tỷ lệ weight (cuối tuần sẽ nhiều hơn)
+    // Số đơn cho ngày này theo tỷ lệ weight
     let ordersForThisDay: number;
     if (dayIdx === ordersPerDay.length - 1) {
-      // Ngày cuối nhận hết phần còn lại (tránh mất đơn do làm tròn)
       ordersForThisDay = actualTotal - distributedSoFar;
     } else {
       ordersForThisDay = plannedTotal > 0
         ? Math.round((dayPlan.orderCount / plannedTotal) * actualTotal)
         : 0;
-      // Không vượt quá số đơn còn lại
       ordersForThisDay = Math.min(ordersForThisDay, actualTotal - distributedSoFar);
     }
     distributedSoFar += ordersForThisDay;
-    
-    // BƯỚC 1: Phân bổ SỐ ĐƠN cho từng khung giờ theo weight
-    // (Đảm bảo mỗi khung giờ nhận đúng tỷ lệ đơn, không bị dồn vào giờ sớm)
-    const totalSlotWeight = TIME_SLOTS.reduce((sum, s) => sum + s.weight * (s.end - s.start), 0);
+
+    if (ordersForThisDay <= 0) continue;
+
+    // Tách late orders ra khỏi quota chính
+    let lateCount = 0;
+    if (lateWindowValid && ordersForThisDay > 1) {
+      const wanted = Math.round(ordersForThisDay * config.lateOrderPercent);
+      lateCount = Math.min(
+        Math.max(wanted, config.lateOrderMinCount),
+        config.lateOrderMaxCount,
+        ordersForThisDay - 1 // luôn để lại ít nhất 1 đơn cho khung giờ thường
+      );
+      lateCount = Math.max(0, lateCount);
+    }
+    const regularCount = ordersForThisDay - lateCount;
+
+    // BƯỚC 1: Phân bổ SỐ ĐƠN cho từng khung giờ thường theo weight
+    const totalSlotWeight = timeSlots.reduce((sum, s) => sum + s.weight * (s.end - s.start), 0);
 
     interface SlotAllocation {
       slotStartMin: number;
@@ -136,34 +141,38 @@ export function distributeOrdersToDays(
     const slotAllocations: SlotAllocation[] = [];
     let ordersAllocatedToSlots = 0;
 
-    for (let s = 0; s < TIME_SLOTS.length; s++) {
-      const slot = TIME_SLOTS[s];
-      const slotStartMin = slot.start * 60;
-      const slotEndMin = slot.end * 60;
+    for (let s = 0; s < timeSlots.length; s++) {
+      const slot = timeSlots[s];
+      const slotStartMin = Math.round(slot.start * 60);
+      const slotEndMin = Math.round(slot.end * 60);
       const slotDuration = slotEndMin - slotStartMin;
       const slotWeight = slot.weight * (slot.end - slot.start);
 
-      // Số đơn cho khung giờ này (tỷ lệ theo weight)
       let orderCountForSlot: number;
-      if (s === TIME_SLOTS.length - 1) {
-        orderCountForSlot = ordersForThisDay - ordersAllocatedToSlots;
+      if (s === timeSlots.length - 1) {
+        orderCountForSlot = regularCount - ordersAllocatedToSlots;
       } else {
-        orderCountForSlot = Math.round(ordersForThisDay * slotWeight / totalSlotWeight);
+        orderCountForSlot = totalSlotWeight > 0
+          ? Math.round(regularCount * slotWeight / totalSlotWeight)
+          : 0;
       }
-      orderCountForSlot = Math.max(0, Math.min(orderCountForSlot, ordersForThisDay - ordersAllocatedToSlots));
+      orderCountForSlot = Math.max(0, Math.min(orderCountForSlot, regularCount - ordersAllocatedToSlots));
       ordersAllocatedToSlots += orderCountForSlot;
 
-      // BƯỚC 2: Tạo burst anchors trong khung giờ này
-      // Mỗi đợt 2-5 đơn sát nhau, burst clustering tạo cảm giác tự nhiên
-      const burstSize = 2 + Math.floor(Math.random() * 4); // 2-5 đơn/đợt
+      // BƯỚC 2: Tạo burst anchors theo Poisson process
+      // Order statistics của N mẫu uniform i.i.d. trên [start, end] tương đương arrival times
+      // của Poisson process điều kiện có đúng N events — cho cảm giác cluster/gap tự nhiên,
+      // không bị lưới đều như anchor cách đều.
+      const burstSize = 2 + Math.floor(Math.random() * 4);
       const numBurstsForSlot = Math.max(1, Math.ceil(orderCountForSlot / burstSize));
 
       const anchors: number[] = [];
       for (let b = 0; b < numBurstsForSlot; b++) {
-        const basePos = slotStartMin + (slotDuration / (numBurstsForSlot + 1)) * (b + 1);
-        const jitterRange = Math.min(5, Math.floor(slotDuration / (numBurstsForSlot + 1) / 2));
-        const jitter = Math.floor(Math.random() * (jitterRange * 2 + 1)) - jitterRange;
-        anchors.push(Math.max(slotStartMin, Math.min(slotEndMin - 1, Math.round(basePos + jitter))));
+        anchors.push(slotStartMin + Math.random() * slotDuration);
+      }
+      anchors.sort((a, b) => a - b);
+      for (let b = 0; b < anchors.length; b++) {
+        anchors[b] = Math.max(slotStartMin, Math.min(slotEndMin - 1, Math.round(anchors[b])));
       }
 
       slotAllocations.push({ slotStartMin, slotEndMin, orderCount: orderCountForSlot, anchors });
@@ -175,33 +184,38 @@ export function distributeOrdersToDays(
 
       let anchorIdx = 0;
       let ordersInBurst = 0;
-      let burstCapacity = 2 + Math.floor(Math.random() * 5); // 2-6 đơn/đợt
+      let burstCapacity = 2 + Math.floor(Math.random() * 5);
 
       for (let i = 0; i < allocation.orderCount && orderIndex < orders.length; i++) {
         const order = orders[orderIndex];
         const anchorMinute = allocation.anchors[anchorIdx];
-        // Jitter 0-3 phút cho mỗi đơn trong burst
         const jitter = Math.floor(Math.random() * 4);
         const totalMinutes = Math.min(anchorMinute + jitter, allocation.slotEndMin - 1);
 
         const scheduledTime = new Date(dayPlan.date);
         scheduledTime.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
 
-        distributedOrders.push({
-          ...order,
-          scheduledTime
-        });
+        distributedOrders.push({ ...order, scheduledTime });
 
         orderIndex++;
         ordersInBurst++;
 
-        // Chuyển sang đợt tiếp theo khi đủ capacity
         if (ordersInBurst >= burstCapacity && anchorIdx < allocation.anchors.length - 1) {
           anchorIdx++;
           ordersInBurst = 0;
           burstCapacity = 2 + Math.floor(Math.random() * 5);
         }
       }
+    }
+
+    // BƯỚC 4: Phân bổ late orders vào late window (uniform random)
+    for (let i = 0; i < lateCount && orderIndex < orders.length; i++) {
+      const order = orders[orderIndex];
+      const totalMinutes = lateStartMin + Math.floor(Math.random() * (lateEndMin - lateStartMin));
+      const scheduledTime = new Date(dayPlan.date);
+      scheduledTime.setHours(Math.floor(totalMinutes / 60), totalMinutes % 60, 0, 0);
+      distributedOrders.push({ ...order, scheduledTime });
+      orderIndex++;
     }
   }
 

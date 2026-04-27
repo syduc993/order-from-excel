@@ -2,25 +2,25 @@ import { Product } from '@/types/excel';
 import { DEFAULT_SETTINGS } from '@/types/settings';
 
 // Tính số lượng đơn hàng tự động từ sản phẩm
+// Trung bình đơn ước bằng min + ratio*(max-min) — ratio < 0.5 bù cho bias 60/30/10 về pool giá thấp.
 export const calculateTotalOrders = (
     products: Product[],
     minAmount: number = DEFAULT_SETTINGS.orderRules.minTotalAmount,
-    maxAmount: number = DEFAULT_SETTINGS.orderRules.maxTotalAmount
+    maxAmount: number = DEFAULT_SETTINGS.orderRules.maxTotalAmount,
+    ratio: number = DEFAULT_SETTINGS.orderRules.avgOrderValueRatio
 ): number => {
     if (products.length === 0) return 0;
 
-    // Tính tổng giá trị sản phẩm: sum(quantity * price)
     const totalProductValue = products.reduce((sum, product) => {
         return sum + (product.quantity * product.price);
     }, 0);
 
-    // Giá trị trung bình mỗi đơn
-    const averageOrderValue = (minAmount + maxAmount) / 2;
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    const averageOrderValue = minAmount + (maxAmount - minAmount) * clampedRatio;
+    if (averageOrderValue <= 0) return 0;
 
-    // Số đơn hàng = Tổng giá trị sản phẩm / Giá trị trung bình mỗi đơn
     const calculatedOrders = Math.floor(totalProductValue / averageOrderValue);
 
-    // Đảm bảo tối thiểu 1 đơn nếu có sản phẩm
     return Math.max(1, calculatedOrders);
 };
 

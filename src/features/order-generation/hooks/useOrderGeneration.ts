@@ -66,7 +66,8 @@ export const useOrderGeneration = ({
         const totalOrders = calculateTotalOrders(
             productsToUse,
             settings.orderRules.minTotalAmount,
-            settings.orderRules.maxTotalAmount
+            settings.orderRules.maxTotalAmount,
+            settings.orderRules.avgOrderValueRatio
         );
 
         if (totalOrders <= 0) {
@@ -96,7 +97,8 @@ export const useOrderGeneration = ({
             const ordersPerDay = calculateOrdersPerDay(
                 totalOrders,
                 scheduleConfig.startDate,
-                scheduleConfig.endDate
+                scheduleConfig.endDate,
+                settings.timeDistribution
             );
 
             // 3. Tạo TẤT CẢ đơn hàng trước (chưa gán scheduledTime)
@@ -344,18 +346,17 @@ export const useOrderGeneration = ({
                 ordersPerDay,
                 scheduleConfig.startDate,
                 scheduleConfig.endDate,
-                false
+                settings.timeDistribution
             );
             orders.push(...distributedMainOrders);
 
-            // Phân bổ đơn vét vào khung giờ cao điểm cuối tuần (hoặc gần cuối tuần)
             if (sweepOrders.length > 0) {
                 const distributedSweepOrders = distributeOrdersToDays(
                     sweepOrders,
                     ordersPerDay,
                     scheduleConfig.startDate,
                     scheduleConfig.endDate,
-                    true // isSweepOrder = true
+                    settings.timeDistribution
                 );
                 orders.push(...distributedSweepOrders);
             }
