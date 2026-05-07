@@ -28,3 +28,9 @@ dist-ssr
 *.sln
 *.sw?
 NUL
+
+# Claude & BMAD
+.claude/
+.mcp.json
+_bmad/
+_bmad-output/
