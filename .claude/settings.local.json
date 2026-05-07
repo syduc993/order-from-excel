@@ -51,7 +51,11 @@
       "Bash(echo:*)",
       "Bash(gcloud scheduler jobs list:*)",
       "Bash(gcloud scheduler jobs describe:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(git push:*)",
+      "Bash(gcloud builds triggers list:*)",
+      "Bash(gcloud builds triggers delete:*)",
+      "Bash(git fetch:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -421,6 +421,8 @@ export class SupabaseService {
 
     // Delete a single order (only draft/cancelled)
     async deleteOrder(orderId: number): Promise<void> {
+        await this.client.from('order_results').delete().eq('order_queue_id', orderId);
+
         const { error } = await this.client
             .from('orders_queue')
             .delete()
@@ -432,6 +434,8 @@ export class SupabaseService {
 
     // Delete multiple orders (only draft/cancelled)
     async deleteOrders(orderIds: number[]): Promise<number> {
+        await this.client.from('order_results').delete().in('order_queue_id', orderIds);
+
         const { data, error } = await this.client
             .from('orders_queue')
             .delete()
@@ -445,7 +449,19 @@ export class SupabaseService {
 
     // Delete a batch and all its orders (hard delete)
     async deleteBatch(batchId: string): Promise<{ deletedOrders: number }> {
-        // Delete child orders first, then parent batch
+        // Get order IDs first so we can cascade-delete order_results
+        const { data: orderIds, error: idsError } = await this.client
+            .from('orders_queue')
+            .select('id')
+            .eq('batch_id', batchId);
+
+        if (idsError) throw new Error(`Failed to fetch order ids: ${idsError.message}`);
+
+        if (orderIds && orderIds.length > 0) {
+            const ids = orderIds.map((r: any) => r.id);
+            await this.client.from('order_results').delete().in('order_queue_id', ids);
+        }
+
         const { data, error: ordersError } = await this.client
             .from('orders_queue')
             .delete()
