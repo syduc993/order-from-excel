@@ -38,7 +38,7 @@ export const useOrderGeneration = ({
     });
     const { settings } = useSettings();
 
-    const handleSupabaseExport = async () => {
+    const handleSupabaseExport = async (forceUseActualInventory?: boolean) => {
         const supabaseService = getSupabaseService();
         if (!supabaseService) {
             toast.error('Vui lòng cấu hình Supabase trong file .env');
@@ -56,8 +56,10 @@ export const useOrderGeneration = ({
         }
 
         // Adjust products based on user choice
+        // forceUseActualInventory overrides state to avoid React async state timing issues
+        const shouldUseActualInventory = forceUseActualInventory ?? useActualInventory;
         let productsToUse = products;
-        if (useActualInventory && inventoryMap.size > 0) {
+        if (shouldUseActualInventory && inventoryMap.size > 0) {
             productsToUse = adjustProductsToInventory(products, inventoryMap);
             toast.info('Sử dụng số lượng tồn kho thực tế từ NhanhVN');
         }

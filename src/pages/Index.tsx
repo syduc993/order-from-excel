@@ -608,7 +608,7 @@ const Index = () => {
                     setUseActualInventory(true);
                     setShowInventoryDialog(false);
                     toast.info('Đã chọn: Sử dụng tồn kho thực tế từ NhanhVN');
-                    await handleSupabaseExport();
+                    await handleSupabaseExport(true);
                 }}
                 onCancel={() => {
                     setShowInventoryDialog(false);
